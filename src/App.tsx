@@ -1,6 +1,7 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Editor from "@monaco-editor/react";
 import {
+  AlertTriangle,
   Bot,
   ChevronDown,
   ChevronRight,
@@ -13,6 +14,7 @@ import {
   PanelBottom,
   Play,
   Save,
+  RotateCcw,
   Search,
   Send,
   Settings,
@@ -28,12 +30,17 @@ import type {
   ProviderSettings,
   TeamMode,
 } from "./types";
+import { bridge, hasBridge } from "./lib/bridge";
 import { agentRoster, runQuarkTeam } from "./lib/orchestrator";
 
 type ChatMessage = {
   role: "user" | "assistant";
   content: string;
 };
+
+function describeError(error: unknown) {
+  return error instanceof Error ? error.message : String(error);
+}
 
 function languageFromPath(path: string) {
   const extension = path.split(".").pop()?.toLowerCase();
@@ -148,6 +155,9 @@ function App() {
   const [agentStates, setAgentStates] = useState<AgentRunState[]>(agentRoster("swarm"));
   const [agentEvents, setAgentEvents] = useState<AgentEvent[]>([]);
   const [showSettings, setShowSettings] = useState(false);
+  const [lastRun, setLastRun] = useState<{ checkpointId: string; files: string[] } | null>(null);
+  const bridgeReady = useMemo(() => hasBridge(), []);
+  const chatEndRef = useRef<HTMLDivElement | null>(null);
   const [providers, setProviders] = useState<ProviderPreset[]>([]);
   const [models, setModels] = useState<string[]>([]);
   const [settings, setSettings] = useState<ProviderSettings>({
@@ -161,33 +171,24 @@ function App() {
   const dirty = content !== savedContent;
 
   useEffect(() => {
-    Promise.all([window.quark.getSettings(), window.quark.listProviders()])
+    if (!bridgeReady) return;
+    const quark = bridge();
+
+    Promise.all([quark.getSettings(), quark.listProviders()])
       .then(([stored, presets]) => {
         setSettings(stored);
         setProviders(presets);
       })
       .catch(() => undefined);
 
-    const dispose = window.quark.onAgentEvent((event) => {
+    return quark.onAgentEvent((event) => {
       setAgentEvents((prev) => [...prev.slice(-50), event]);
     });
-    return dispose;
-  }, []);
+  }, [bridgeReady]);
 
   useEffect(() => {
     setAgentStates(agentRoster(mode));
   }, [mode]);
-
-  useEffect(() => {
-    const handler = (event: KeyboardEvent) => {
-      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "s") {
-        event.preventDefault();
-        void saveFile();
-      }
-    };
-    window.addEventListener("keydown", handler);
-    return () => window.removeEventListener("keydown", handler);
-  });
 
   const workspaceName = useMemo(() => {
     if (!workspace) return "No folder open";
@@ -201,11 +202,11 @@ function App() {
 
   async function refreshWorkspace() {
     if (!workspace) return;
-    const nextTree = await window.quark.getTree();
+    const nextTree = await bridge().getTree();
     setTree(nextTree);
     if (activePath) {
       try {
-        const next = await window.quark.readFile(activePath);
+        const next = await bridge().readFile(activePath);
         setContent(next);
         setSavedContent(next);
       } catch {
@@ -217,30 +218,57 @@ function App() {
   }
 
   async function openWorkspace() {
-    const root = await window.quark.openWorkspace();
-    if (!root) return;
-    setWorkspace(root);
-    const nextTree = await window.quark.getTree();
-    setTree(nextTree);
-    setActivePath(undefined);
-    setContent("");
-    setSavedContent("");
-    setAgentEvents([]);
+    try {
+      const root = await bridge().openWorkspace();
+      if (!root) return;
+      setWorkspace(root);
+      setTree(await bridge().getTree());
+      setActivePath(undefined);
+      setContent("");
+      setSavedContent("");
+      setAgentEvents([]);
+      setLastRun(null);
+    } catch (error) {
+      setTerminalLines((prev) => [...prev, `error: ${describeError(error)}`]);
+    }
   }
 
   async function openFile(node: FileNode) {
-    const next = await window.quark.readFile(node.path);
-    setActivePath(node.path);
-    setContent(next);
-    setSavedContent(next);
+    try {
+      const next = await bridge().readFile(node.path);
+      setActivePath(node.path);
+      setContent(next);
+      setSavedContent(next);
+    } catch (error) {
+      setTerminalLines((prev) => [...prev, `error: ${describeError(error)}`]);
+    }
   }
 
-  async function saveFile() {
-    if (!activePath || !dirty) return;
-    await window.quark.writeFile(activePath, content);
-    setSavedContent(content);
-    setTerminalLines((prev) => [...prev, `saved ${activePath}`]);
-  }
+  const saveFile = useCallback(async () => {
+    if (!activePath || content === savedContent) return;
+    try {
+      await bridge().writeFile(activePath, content);
+      setSavedContent(content);
+      setTerminalLines((prev) => [...prev, `saved ${activePath}`]);
+    } catch (error) {
+      setTerminalLines((prev) => [...prev, `error: ${describeError(error)}`]);
+    }
+  }, [activePath, content, savedContent]);
+
+  useEffect(() => {
+    const handler = (event: KeyboardEvent) => {
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "s") {
+        event.preventDefault();
+        void saveFile();
+      }
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [saveFile]);
+
+  useEffect(() => {
+    chatEndRef.current?.scrollIntoView({ block: "end" });
+  }, [messages, busy]);
 
   async function runTerminal() {
     const command = terminalInput.trim();
@@ -248,15 +276,12 @@ function App() {
     setTerminalInput("");
     setTerminalLines((prev) => [...prev, `$ ${command}`]);
     try {
-      const result = await window.quark.runCommand(command);
+      const result = await bridge().runCommand(command);
       const output = `${result.stdout}${result.stderr}`.trim();
       setTerminalLines((prev) => [...prev, output || "(no output)"]);
       await refreshWorkspace();
     } catch (error) {
-      setTerminalLines((prev) => [
-        ...prev,
-        `error: ${error instanceof Error ? error.message : String(error)}`,
-      ]);
+      setTerminalLines((prev) => [...prev, `error: ${describeError(error)}`]);
     }
   }
 
@@ -267,6 +292,20 @@ function App() {
   async function askTeam() {
     const goal = prompt.trim();
     if (!goal || busy) return;
+
+    if (!bridgeReady) {
+      setMessages((prev) => [
+        ...prev,
+        { role: "user", content: goal },
+        {
+          role: "assistant",
+          content:
+            "The QuarkCode desktop bridge is not available in this window, so there is no workspace to work on. Launch the Electron app with `npm run dev`.",
+        },
+      ]);
+      setPrompt("");
+      return;
+    }
 
     if (!workspace) {
       setMessages((prev) => [
@@ -286,7 +325,7 @@ function App() {
 
     try {
       if (autopilot) {
-        const result = await window.quark.runAgentic({
+        const result = await bridge().runAgentic({
           goal,
           options: {
             quality: mode,
@@ -295,6 +334,11 @@ function App() {
           },
         });
         await refreshWorkspace();
+        setLastRun(
+          result.changedFiles.length
+            ? { checkpointId: result.checkpointId, files: result.changedFiles }
+            : null,
+        );
         const changed = result.changedFiles.length
           ? `\n\nChanged: ${result.changedFiles.join(", ")}`
           : "\n\nNo files changed.";
@@ -320,10 +364,7 @@ function App() {
     } catch (error) {
       setMessages((prev) => [
         ...prev,
-        {
-          role: "assistant",
-          content: `QuarkTeam stopped: ${error instanceof Error ? error.message : String(error)}`,
-        },
+        { role: "assistant", content: `QuarkTeam stopped: ${describeError(error)}` },
       ]);
     } finally {
       setBusy(false);
@@ -345,22 +386,47 @@ function App() {
 
   async function discoverProviderModels() {
     try {
-      const saved = await window.quark.setSettings(settings);
+      const saved = await bridge().setSettings(settings);
       setSettings(saved);
-      const discovered = await window.quark.discoverModels();
+      const discovered = await bridge().discoverModels();
       setModels(discovered.slice(0, 300));
     } catch (error) {
-      setTerminalLines((prev) => [
-        ...prev,
-        `provider discovery: ${error instanceof Error ? error.message : String(error)}`,
-      ]);
+      setTerminalLines((prev) => [...prev, `provider discovery: ${describeError(error)}`]);
     }
   }
 
   async function saveProviderSettings() {
-    const saved = await window.quark.setSettings(settings);
-    setSettings(saved);
-    setShowSettings(false);
+    try {
+      const saved = await bridge().setSettings(settings);
+      setSettings(saved);
+      setShowSettings(false);
+    } catch (error) {
+      setTerminalLines((prev) => [...prev, `provider settings: ${describeError(error)}`]);
+    }
+  }
+
+  async function revertLastRun() {
+    if (!lastRun || busy) return;
+    setBusy(true);
+    try {
+      const result = await bridge().revertCheckpoint(lastRun.checkpointId);
+      await refreshWorkspace();
+      setLastRun(null);
+      setMessages((prev) => [
+        ...prev,
+        {
+          role: "assistant",
+          content: `Reverted ${result.restoredFiles.length} file(s) to the state before the last Autopilot run.`,
+        },
+      ]);
+    } catch (error) {
+      setMessages((prev) => [
+        ...prev,
+        { role: "assistant", content: `Revert failed: ${describeError(error)}` },
+      ]);
+    } finally {
+      setBusy(false);
+    }
   }
 
   return (
@@ -568,6 +634,25 @@ function App() {
             </div>
           ) : null}
 
+          {!bridgeReady ? (
+            <div className="bridge-warning">
+              <AlertTriangle size={14} />
+              <span>
+                Desktop bridge not detected. Run <code>npm run dev</code> and use the QuarkCode
+                window; the browser tab cannot reach your workspace.
+              </span>
+            </div>
+          ) : null}
+
+          {lastRun ? (
+            <div className="revert-row">
+              <span>{lastRun.files.length} file(s) changed by Autopilot</span>
+              <button onClick={() => void revertLastRun()} disabled={busy}>
+                <RotateCcw size={13} /> Revert run
+              </button>
+            </div>
+          ) : null}
+
           <div className="autopilot-row">
             <button className={autopilot ? "autopilot active" : "autopilot"} onClick={() => !busy && setAutopilot((v) => !v)}>
               <Play size={13} /> {autopilot ? "Safe Autopilot ON" : "Advisory chat"}
@@ -623,6 +708,7 @@ function App() {
                 {autopilot ? "QuarkTeam is operating on the workspace…" : "QuarkTeam is reasoning…"}
               </div>
             ) : null}
+            <div ref={chatEndRef} />
           </div>
 
           <div className="composer">

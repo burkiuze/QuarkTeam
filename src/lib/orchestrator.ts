@@ -1,4 +1,5 @@
 import { AGENTS, systemPrompt } from "./agents";
+import { bridge } from "./bridge";
 import type {
   AgentRunState,
   TeamMode,
@@ -39,9 +40,10 @@ async function runAgent(
   onStatus: StatusCallback,
 ) {
   const agent = AGENTS[id];
+  if (!agent) throw new Error(`Unknown QuarkTeam agent: ${id}`);
   onStatus({ id, name: `${agent.name} · ${agent.title}`, status: "running" });
   try {
-    const output = await window.quark.complete({
+    const output = await bridge().complete({
       system: systemPrompt(agent),
       user,
       temperature: id === "lead" ? 0.15 : 0.25,

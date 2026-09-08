@@ -36,6 +36,13 @@ Independent Prism review
 
 Fast mode skips most council calls. Team mode uses a smaller council. Swarm mode uses all background roles.
 
+## Renderer isolation
+
+The renderer runs sandboxed with context isolation, loads only bundled assets under a
+Content-Security-Policy, and reaches the main process exclusively through the `preload.cjs`
+bridge. The editor is bundled rather than fetched from a CDN, so the app works offline and
+never executes remote code.
+
 ## Provider abstraction
 
 `electron/providers.ts` normalizes four common model APIs into a text-completion primitive:
@@ -73,7 +80,8 @@ Safe Autopilot:
 - blocks `.git` and `node_modules` writes
 - blocks shell metacharacters in model-run commands
 - allow-lists common build/test/lint/typecheck/Git inspection commands
-- caps output sizes and command runtimes
+- caps output sizes, command runtimes and provider request deadlines
+- snapshots every file before its first write so a run can be reverted
 - treats repository instructions as untrusted input
 
 ## Skills
@@ -103,7 +111,7 @@ This can materially improve reliability, but it is not a mathematical capability
 
 1. Native provider tool-calling adapters
 2. Model router with role-specific models and failover
-3. Durable checkpoints + rollback
+3. Durable checkpoints + rollback (currently in-session only)
 4. Diff approval UX
 5. MCP
 6. LSP/symbol graph

@@ -214,16 +214,28 @@ function parseOpenAIChat(data: any): string {
 }
 
 function parseOpenAIResponses(data: any): string {
-  if (typeof data?.output_text === "string") return data.output_text;
+  if (typeof data?.output_text === "string" && data.output_text.trim()) {
+    return data.output_text;
+  }
   if (!Array.isArray(data?.output)) return "";
-  const chunks: string[] = [];
+
+  const answer: string[] = [];
+  const fallback: string[] = [];
   for (const item of data.output) {
+    // Reasoning items also carry "text" parts. Mixing them into the answer
+    // corrupts the strict JSON action protocol the executor depends on.
+    const isReasoning = item?.type === "reasoning";
     if (!Array.isArray(item?.content)) continue;
     for (const part of item.content) {
-      if (typeof part?.text === "string") chunks.push(part.text);
+      if (typeof part?.text !== "string") continue;
+      if (!isReasoning && (part.type === "output_text" || part.type === undefined)) {
+        answer.push(part.text);
+      } else {
+        fallback.push(part.text);
+      }
     }
   }
-  return chunks.join("\n");
+  return (answer.length ? answer : fallback).join("\n");
 }
 
 function parseAnthropic(data: any): string {
@@ -241,10 +253,19 @@ function parseGemini(data: any): string {
     .join("\n");
 }
 
+const COMPLETION_TIMEOUT_MS = 300_000;
+const DISCOVERY_TIMEOUT_MS = 30_000;
+
 export async function providerComplete(
   settings: ProviderSettings,
   payload: { system: string; user: string; temperature?: number },
 ): Promise<string> {
+  if (!settings.baseUrl?.trim()) {
+    throw new Error("No base URL configured. Pick a provider in QuarkCode AI settings.");
+  }
+  if (!settings.model?.trim()) {
+    throw new Error("No model configured. Pick or type a model in QuarkCode AI settings.");
+  }
   const base = settings.baseUrl.replace(/\/+$/, "");
   let url = "";
   let body: unknown;
@@ -292,11 +313,25 @@ export async function providerComplete(
       break;
   }
 
-  const response = await fetch(url, {
-    method: "POST",
-    headers: authHeaders(settings),
-    body: JSON.stringify(body),
-  });
+  let response: Response;
+  try {
+    response = await fetch(url, {
+      method: "POST",
+      headers: authHeaders(settings),
+      body: JSON.stringify(body),
+      // Without a deadline a stalled connection freezes the whole agent loop.
+      signal: AbortSignal.timeout(COMPLETION_TIMEOUT_MS),
+    });
+  } catch (error) {
+    if (error instanceof Error && error.name === "TimeoutError") {
+      throw new Error(
+        `${settings.providerId} did not respond within ${COMPLETION_TIMEOUT_MS / 1000}s.`,
+      );
+    }
+    throw new Error(
+      `${settings.providerId} request failed: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
 
   if (!response.ok) {
     const text = await response.text();
@@ -317,20 +352,30 @@ export async function providerComplete(
 }
 
 export async function discoverModels(settings: ProviderSettings): Promise<string[]> {
+  if (!settings.baseUrl?.trim()) return [];
   const base = settings.baseUrl.replace(/\/+$/, "");
-  if (settings.protocol === "gemini") {
-    if (!settings.apiKey) return [];
-    const response = await fetch(`${base}/models?key=${encodeURIComponent(settings.apiKey)}`);
-    if (!response.ok) return [];
-    const data = await response.json() as any;
-    return (data?.models ?? [])
-      .map((model: any) => String(model?.name ?? "").replace(/^models\//, ""))
-      .filter(Boolean);
-  }
 
-  if (settings.protocol === "anthropic") return [];
-  const response = await fetch(`${base}/models`, { headers: authHeaders(settings) });
-  if (!response.ok) return [];
-  const data = await response.json() as any;
-  return (data?.data ?? []).map((model: any) => String(model?.id ?? "")).filter(Boolean);
+  const get = (url: string, headers?: Record<string, string>) =>
+    fetch(url, { headers, signal: AbortSignal.timeout(DISCOVERY_TIMEOUT_MS) });
+
+  try {
+    if (settings.protocol === "gemini") {
+      if (!settings.apiKey) return [];
+      const response = await get(`${base}/models?key=${encodeURIComponent(settings.apiKey)}`);
+      if (!response.ok) return [];
+      const data = (await response.json()) as any;
+      return (data?.models ?? [])
+        .map((model: any) => String(model?.name ?? "").replace(/^models\//, ""))
+        .filter(Boolean);
+    }
+
+    // Anthropic exposes GET /v1/models with the same x-api-key auth.
+    const response = await get(`${base}/models`, authHeaders(settings));
+    if (!response.ok) return [];
+    const data = (await response.json()) as any;
+    return (data?.data ?? []).map((model: any) => String(model?.id ?? "")).filter(Boolean);
+  } catch {
+    // Discovery is a convenience; an offline or slow endpoint is not an error.
+    return [];
+  }
 }

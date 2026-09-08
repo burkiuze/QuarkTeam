@@ -14,6 +14,8 @@ contextBridge.exposeInMainWorld("quark", {
   discoverModels: () => ipcRenderer.invoke("providers:models"),
   complete: (payload: unknown) => ipcRenderer.invoke("ai:complete", payload),
   runAgentic: (payload: unknown) => ipcRenderer.invoke("agent:run", payload),
+  revertCheckpoint: (checkpointId: string) =>
+    ipcRenderer.invoke("agent:revert", checkpointId),
   onAgentEvent: (listener: (event: unknown) => void) => {
     const wrapped = (_event: unknown, payload: unknown) => listener(payload);
     ipcRenderer.on("agent:event", wrapped);

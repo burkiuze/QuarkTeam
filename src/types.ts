@@ -70,6 +70,9 @@ export type QuarkBridge = {
       quality?: TeamMode;
     };
   }): Promise<AgenticResult>;
+  revertCheckpoint(
+    checkpointId: string,
+  ): Promise<{ checkpointId: string; restoredFiles: string[] }>;
   onAgentEvent(listener: (event: AgentEvent) => void): () => void;
 };
 

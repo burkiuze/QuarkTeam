@@ -736,6 +736,64 @@ button {
   background: #101012;
 }
 
+.bridge-warning {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 9px 10px;
+  border-bottom: 1px solid #202024;
+  background: #1c1408;
+  color: #e2b04a;
+  font-size: 10px;
+  line-height: 1.5;
+}
+
+.bridge-warning svg {
+  flex: none;
+  margin-top: 1px;
+}
+
+.bridge-warning code {
+  font-family: "JetBrains Mono", "SFMono-Regular", Consolas, monospace;
+  color: #f3d08a;
+}
+
+.revert-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 7px 8px;
+  border-bottom: 1px solid #202024;
+  background: #101012;
+  color: #62626d;
+  font-size: 9px;
+}
+
+.revert-row button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 25px;
+  padding: 0 9px;
+  border: 1px solid #34343a;
+  border-radius: 6px;
+  background: #161619;
+  color: #b8b8c2;
+  font-size: 10px;
+  cursor: pointer;
+}
+
+.revert-row button:hover:not(:disabled) {
+  color: #f1f1f4;
+  border-color: #62626d;
+}
+
+.revert-row button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
 .autopilot-row {
   min-height: 42px;
   padding: 7px 8px;

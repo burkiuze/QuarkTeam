@@ -8,6 +8,34 @@ import { providerComplete, type ProviderSettings } from "./providers.js";
 
 const execAsync = promisify(exec);
 
+type ExecFailure = { stdout?: string; stderr?: string; message?: string };
+
+/**
+ * Captures the output of a command that exits non-zero. A failing test run is
+ * the most valuable evidence the executor gets, so it must never be reduced to
+ * "Command failed".
+ */
+async function execCapture(command: string, options: { cwd: string; timeout: number; maxBuffer: number }) {
+  try {
+    const { stdout, stderr } = await execAsync(command, options);
+    return { stdout, stderr, failed: false };
+  } catch (error) {
+    const failure = error as ExecFailure;
+    if (failure && (failure.stdout !== undefined || failure.stderr !== undefined)) {
+      return {
+        stdout: failure.stdout ?? "",
+        stderr: failure.stderr ?? "",
+        failed: true,
+      };
+    }
+    throw error;
+  }
+}
+
+/** Snapshots of every file an autopilot run touched, keyed by checkpoint id. */
+const CHECKPOINTS = new Map<string, { root: string; files: Map<string, string | null> }>();
+const MAX_CHECKPOINTS = 20;
+
 export type AgentEvent = {
   runId: string;
   type: "phase" | "tool" | "result" | "warning" | "done";
@@ -172,7 +200,9 @@ async function searchText(root: string, query: string, maxResults = 80) {
 }
 
 function isSafeCommand(command: string) {
-  if (/[;|><`]/.test(command) || command.includes("$(")) return false;
+  // "&" has to be rejected too: "npm test && rm -rf ~" passes the allow-list
+  // on its first token otherwise. Newlines would smuggle a second command.
+  if (/[;|&><`\n\r]/.test(command) || command.includes("$(")) return false;
   const normalized = command.trim().replace(/\s+/g, " ");
   const allow = [
     /^git (status|diff|log|show|grep)( |$)/,
@@ -269,21 +299,20 @@ async function runTool(ctx: RuntimeContext, action: ToolAction): Promise<string>
       if (ctx.options.mode === "safe" && !isSafeCommand(command)) {
         return `BLOCKED_BY_SAFE_MODE: ${command}. Use build/test/lint/typecheck/git inspection commands, or ask the user to enable Full Autopilot.`;
       }
-      const { stdout, stderr } = await execAsync(command, {
+      const { stdout, stderr, failed } = await execCapture(command, {
         cwd: ctx.root,
         timeout: 120_000,
         maxBuffer: 4 * 1024 * 1024,
       });
-      return `${stdout}${stderr}`.trim().slice(0, 50_000) || "Command completed with no output.";
+      const output = `${stdout}${stderr}`.trim().slice(0, 50_000);
+      if (failed) {
+        return `COMMAND_FAILED (non-zero exit)\n${output || "(no output)"}`;
+      }
+      return output || "Command completed with no output.";
     }
     case "git_diff": {
       try {
-        const { stdout, stderr } = await execAsync("git diff -- .", {
-          cwd: ctx.root,
-          timeout: 30_000,
-          maxBuffer: 4 * 1024 * 1024,
-        });
-        return `${stdout}${stderr}`.trim().slice(0, 80_000) || "No git diff.";
+        return (await workspaceDiff(ctx.root)).slice(0, 80_000) || "No git diff.";
       } catch (error) {
         return `git diff unavailable: ${error instanceof Error ? error.message : String(error)}`;
       }
@@ -328,6 +357,41 @@ async function runTool(ctx: RuntimeContext, action: ToolAction): Promise<string>
   }
 }
 
+/**
+ * `git diff` only reports tracked files, so a freshly created file would be
+ * invisible to both the reviewer and the result panel. Untracked paths are
+ * listed explicitly alongside the diff.
+ */
+async function workspaceDiff(root: string) {
+  const { stdout: diff } = await execCapture("git diff -- .", {
+    cwd: root,
+    timeout: 30_000,
+    maxBuffer: 4 * 1024 * 1024,
+  });
+
+  let untracked: string[] = [];
+  try {
+    const { stdout } = await execCapture("git ls-files --others --exclude-standard", {
+      cwd: root,
+      timeout: 30_000,
+      maxBuffer: 1024 * 1024,
+    });
+    untracked = stdout.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+  } catch {
+    // Non-git workspace.
+  }
+
+  if (!untracked.length) return diff;
+  return `${diff}\n\nNEW UNTRACKED FILES\n${untracked.map((file) => `+ ${file}`).join("\n")}\n`;
+}
+
+function isAgentAction(value: unknown): value is AgentAction {
+  if (!value || typeof value !== "object") return false;
+  const candidate = value as Record<string, unknown>;
+  if (candidate.kind === "final") return typeof candidate.answer === "string";
+  return candidate.kind === "tool" && typeof candidate.tool === "string";
+}
+
 function extractJson(text: string): AgentAction | null {
   const candidates = [text.trim()];
   const fenced = [...text.matchAll(/```(?:json)?\s*([\s\S]*?)```/gi)].map((match) => match[1].trim());
@@ -338,7 +402,7 @@ function extractJson(text: string): AgentAction | null {
   for (const candidate of candidates) {
     try {
       const value = JSON.parse(candidate);
-      if (value?.kind === "tool" || value?.kind === "final") return value as AgentAction;
+      if (isAgentAction(value)) return value;
     } catch {
       // Try next candidate.
     }
@@ -404,14 +468,19 @@ async function council(
         ["Adversarial Reviewer", "Predict likely failure modes and verification needs."],
       ];
 
+  // One flaky advisory call must not abort a run that can still do useful work.
   const responses = await Promise.all(
     roles.map(async ([role, mission]) => {
-      const output = await providerComplete(settings, {
-        system: `You are the QuarkTeam ${role}. ${mission} Do not claim to have edited files. Return compact evidence-oriented notes for another coding agent.`,
-        user: `GOAL\n${goal}\n\nWORKSPACE TREE\n${tree.slice(0, 16_000)}`,
-        temperature: 0.2,
-      });
-      return `## ${role}\n${output}`;
+      try {
+        const output = await providerComplete(settings, {
+          system: `You are the QuarkTeam ${role}. ${mission} Do not claim to have edited files. Return compact evidence-oriented notes for another coding agent.`,
+          user: `GOAL\n${goal}\n\nWORKSPACE TREE\n${tree.slice(0, 16_000)}`,
+          temperature: 0.2,
+        });
+        return `## ${role}\n${output}`;
+      } catch (error) {
+        return `## ${role}\nUnavailable: ${error instanceof Error ? error.message : String(error)}`;
+      }
     }),
   );
   return responses.join("\n\n");
@@ -419,11 +488,45 @@ async function council(
 
 async function reviewDiff(settings: ProviderSettings, goal: string, diff: string) {
   if (!diff.trim()) return "No diff available for review.";
-  return providerComplete(settings, {
-    system: "You are Prism, a skeptical senior code reviewer. Review only material correctness, security, regression and test issues. Be concise. If the patch is good, say APPROVED. Do not invent files outside the diff.",
-    user: `GOAL\n${goal}\n\nDIFF\n${diff.slice(0, 60_000)}`,
-    temperature: 0.1,
-  });
+  try {
+    return await providerComplete(settings, {
+      system: "You are Prism, a skeptical senior code reviewer. Review only material correctness, security, regression and test issues. Be concise. If the patch is good, say APPROVED. Do not invent files outside the diff.",
+      user: `GOAL\n${goal}\n\nDIFF\n${diff.slice(0, 60_000)}`,
+      temperature: 0.1,
+    });
+  } catch (error) {
+    // The work is already on disk; a failed review must not discard the result.
+    return `APPROVED (review skipped: ${error instanceof Error ? error.message : String(error)})`;
+  }
+}
+
+/**
+ * Restores every file an autopilot run snapshotted before editing it. Files the
+ * run created are removed again.
+ */
+export async function restoreCheckpoint(root: string, checkpointId: string) {
+  const checkpoint = CHECKPOINTS.get(checkpointId);
+  if (!checkpoint) {
+    throw new Error("This checkpoint is no longer available in the current session.");
+  }
+  if (path.resolve(checkpoint.root) !== path.resolve(root)) {
+    throw new Error("This checkpoint belongs to a different workspace.");
+  }
+
+  const restored: string[] = [];
+  for (const [rel, before] of checkpoint.files) {
+    const target = safePath(checkpoint.root, rel);
+    if (before === null) {
+      await fs.rm(target, { force: true });
+    } else {
+      await fs.mkdir(path.dirname(target), { recursive: true });
+      await fs.writeFile(target, before, "utf8");
+    }
+    restored.push(rel);
+  }
+
+  CHECKPOINTS.delete(checkpointId);
+  return { checkpointId, restoredFiles: restored };
 }
 
 export async function runAgenticTask(input: {
@@ -464,13 +567,29 @@ export async function runAgenticTask(input: {
   ];
 
   let finalAnswer = "";
+  let providerFailures = 0;
   for (let step = 1; step <= options.maxSteps; step += 1) {
     emit(ctx, { type: "phase", label: `Executor step ${step}/${options.maxSteps}` });
-    const response = await providerComplete(input.settings, {
-      system: executorSystem(options.mode),
-      user: transcript.join("\n\n---\n\n").slice(-120_000),
-      temperature: 0.1,
-    });
+    let response: string;
+    try {
+      response = await providerComplete(input.settings, {
+        system: executorSystem(options.mode),
+        user: transcript.join("\n\n---\n\n").slice(-120_000),
+        temperature: 0.1,
+      });
+      providerFailures = 0;
+    } catch (error) {
+      // Edits already made are on disk, so a transient provider error should
+      // pause the loop rather than throw away the run.
+      providerFailures += 1;
+      const message = error instanceof Error ? error.message : String(error);
+      emit(ctx, { type: "warning", label: "Provider error", detail: message });
+      if (providerFailures >= 3) {
+        finalAnswer = `QuarkTeam stopped after repeated provider errors: ${message}`;
+        break;
+      }
+      continue;
+    }
     const action = extractJson(response);
     if (!action) {
       transcript.push(`MODEL_RESPONSE_INVALID\n${response}\nReturn exactly one valid JSON action.`);
@@ -495,12 +614,7 @@ export async function runAgenticTask(input: {
 
   let diff = "";
   try {
-    const { stdout } = await execAsync("git diff -- .", {
-      cwd: ctx.root,
-      timeout: 30_000,
-      maxBuffer: 4 * 1024 * 1024,
-    });
-    diff = stdout;
+    diff = await workspaceDiff(ctx.root);
   } catch {
     // Non-git workspaces are still valid.
   }
@@ -517,11 +631,21 @@ export async function runAgenticTask(input: {
         "Repair the material findings, inspect before editing, verify, then finish.",
       ];
       for (let step = 1; step <= 12; step += 1) {
-        const response = await providerComplete(input.settings, {
-          system: executorSystem(options.mode),
-          user: repairTranscript.join("\n\n---\n\n").slice(-100_000),
-          temperature: 0.1,
-        });
+        let response: string;
+        try {
+          response = await providerComplete(input.settings, {
+            system: executorSystem(options.mode),
+            user: repairTranscript.join("\n\n---\n\n").slice(-100_000),
+            temperature: 0.1,
+          });
+        } catch (error) {
+          emit(ctx, {
+            type: "warning",
+            label: "Repair pass stopped",
+            detail: error instanceof Error ? error.message : String(error),
+          });
+          break;
+        }
         const action = extractJson(response);
         if (!action) {
           repairTranscript.push(`INVALID_RESPONSE\n${response}`);
@@ -533,9 +657,12 @@ export async function runAgenticTask(input: {
         }
         try {
           const result = await runTool(ctx, action);
+          emit(ctx, { type: "result", label: action.tool, detail: result.slice(0, 500) });
           repairTranscript.push(`ACTION\n${JSON.stringify(action)}\nRESULT\n${result}`);
         } catch (error) {
-          repairTranscript.push(`ERROR\n${error instanceof Error ? error.message : String(error)}`);
+          const message = error instanceof Error ? error.message : String(error);
+          emit(ctx, { type: "warning", label: action.tool, detail: message });
+          repairTranscript.push(`ACTION\n${JSON.stringify(action)}\nERROR\n${message}`);
         }
       }
     }
@@ -546,6 +673,15 @@ export async function runAgenticTask(input: {
     .update(`${ctx.root}:${runId}`)
     .digest("hex")
     .slice(0, 12);
+
+  if (changedFiles.length) {
+    CHECKPOINTS.set(checkpointId, { root: ctx.root, files: new Map(ctx.checkpoint) });
+    while (CHECKPOINTS.size > MAX_CHECKPOINTS) {
+      const oldest = CHECKPOINTS.keys().next().value;
+      if (oldest === undefined) break;
+      CHECKPOINTS.delete(oldest);
+    }
+  }
 
   emit(ctx, {
     type: "done",

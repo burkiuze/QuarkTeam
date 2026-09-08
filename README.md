@@ -4,6 +4,94 @@
 
 > A harness can make a weaker model much more useful through decomposition, tools, independent review and verification, but it cannot guarantee that an average model becomes equivalent to a specific frontier model on every task. QuarkTeam is designed to maximize the base model rather than fake a benchmark claim.
 
+## Kurulum / Installation
+
+### Gereksinimler / Requirements
+
+| | |
+| --- | --- |
+| Node.js | 20.19+ veya 22+ (`node -v`) |
+| npm | 10+ (Node ile birlikte gelir) |
+| git | `git_diff` / `git_status` araçları ve geri alma için önerilir |
+| İşletim sistemi | Windows 10+, macOS 12+, Linux (X11/Wayland) |
+
+Linux'ta Electron için ek paketler gerekebilir:
+
+```bash
+sudo apt-get install -y libnss3 libatk-bridge2.0-0 libgtk-3-0 libgbm1 libasound2
+```
+
+### 1. Depoyu al ve bağımlılıkları kur
+
+```bash
+git clone https://github.com/burkiuze/QuarkTeam.git
+cd QuarkTeam
+npm install
+```
+
+### 2. Uygulamayı başlat
+
+```bash
+npm run dev
+```
+
+Bu komut hem Vite dev sunucusunu hem de **QuarkCode masaüstü penceresini** açar. Uygulamayı
+tarayıcıda `localhost:5173` üzerinden açmayın: dosya sistemi köprüsü yalnızca Electron
+penceresinde vardır, tarayıcı sekmesi çalışma alanına erişemez ve uyarı gösterir.
+
+### 3. Bir model sağlayıcısı bağla
+
+QuarkCode hiçbir API anahtarı içermez. İlk açılışta sağ paneldeki ⚙ **AI settings**
+bölümünden sağlayıcı, model ve anahtarını gir; ayarlar işletim sisteminin uygulama veri
+klasörüne (`quarkcode-settings.json`) kaydedilir. Alternatif olarak proje kökünde bir
+`.env` dosyası kullanabilirsin:
+
+```bash
+cp .env.example .env
+# .env içindeki QUARK_API_KEY satırını kendi anahtarınla doldur
+```
+
+Yerel modellerde (Ollama, LM Studio, llama.cpp) anahtar gerekmez; yalnızca sunucunun
+çalışıyor olması yeterlidir.
+
+### 4. Projeni aç ve çalıştır
+
+1. **Open Project** ile bir klasör seç.
+2. Sağ paneldeki mod seçiciden `Fast` / `Team` / `Swarm` birini seç.
+3. **Safe Autopilot** açıkken görevini yaz — QuarkTeam dosyaları inceler, düzenler,
+   testleri çalıştırır ve yamayı gözden geçirir.
+4. Sonuçtan memnun değilsen **Revert run** ile o çalıştırmanın tüm değişikliklerini geri al.
+
+### Masaüstü kurulum paketi üret
+
+```bash
+npm run dist
+```
+
+Çıktılar `release/` klasörüne yazılır (Windows `nsis`, macOS `dmg`, Linux `AppImage`).
+Paketleme yalnızca çalıştırıldığı platform için üretim yapar.
+
+### Faydalı komutlar
+
+```bash
+npm run dev        # Electron + Vite geliştirme modu
+npm run typecheck  # TypeScript denetimi
+npm run build      # typecheck + üretim derlemesi (dist/, dist-electron/)
+npm run dist       # kurulabilir masaüstü paketi
+```
+
+### Sorun giderme
+
+| Belirti | Çözüm |
+| --- | --- |
+| "Desktop bridge not detected" uyarısı | Tarayıcı sekmesini kapat, `npm run dev` ile açılan Electron penceresini kullan. |
+| "Connect an AI provider before starting Autopilot" | AI settings'ten anahtar gir veya yerel bir sağlayıcı seç. |
+| "No handler registered" / boş pencere | `npm run build` çalıştırıp `dist-electron/preload.cjs` dosyasının oluştuğunu doğrula. |
+| Port 5173 kullanımda | Çalışan diğer Vite sürecini kapat; port `strictPort` ile sabittir. |
+| `npm run dist` hatası (Linux) | Yukarıdaki Electron sistem kütüphanelerini kur. |
+
+---
+
 ## v0.2 Agentic runtime
 
 QuarkCode v0.2 includes:
@@ -35,13 +123,18 @@ QuarkCode v0.2 includes:
   - `read_skill`
   - `delegate`
 - Bounded repair pass after an independent diff review
+- Session-scoped checkpoint + one-click revert of an Autopilot run
 - Workspace path validation and prompt-injection-aware runtime rules
 
 ### Autopilot safety model
 
 Safe Autopilot is the default. Model-written files are constrained to the opened workspace. Direct writes to `.git` and `node_modules` are blocked. Shell commands are limited to common build/test/lint/typecheck and Git-inspection commands. The model is also instructed to treat repository text as untrusted data instead of letting a README or source comment replace runtime rules.
 
-A future Full Autopilot mode can expose broader command execution behind explicit user approval and checkpoint/rollback UI.
+Every file the executor touches is snapshotted before the first write, so **Revert run** restores
+the workspace to its pre-run state (created files are deleted again). Those snapshots live in the
+running app only; they do not survive a restart.
+
+A future Full Autopilot mode can expose broader command execution behind explicit user approval.
 
 ## Providers
 
@@ -94,22 +187,9 @@ model: muse-spark-1.3-contributor-free
 
 QuarkCode does **not** bundle or redistribute an API key. Connect your own eligible OpenCode Zen account/token. Availability, quotas and data-use terms are controlled by that provider and may change.
 
-## Run
-
-```bash
-npm install
-npm run dev
-```
-
-Package the desktop app:
-
-```bash
-npm run dist
-```
-
-Outputs go to `release/`.
-
 ## Environment defaults
+
+`.env` (or real environment variables, which always win) can preset the provider:
 
 ```bash
 QUARK_PROVIDER=opencode-zen
@@ -119,7 +199,7 @@ QUARK_MODEL=muse-spark-1.3-contributor-free
 QUARK_API_KEY=
 ```
 
-You can also configure providers from the QuarkTeam settings panel.
+Anything saved from the QuarkTeam settings panel takes precedence over these defaults.
 
 ## Workspace skills
 
@@ -157,7 +237,7 @@ v0.2 is a substantially more agentic foundation, but the roadmap is intentionall
 
 - native structured function calling per provider instead of the current cross-provider JSON action protocol
 - per-role model routing and fallback chains
-- durable checkpoint/rollback UI
+- durable (on-disk, restart-surviving) checkpoint history
 - side-by-side AI diff Accept/Reject
 - LSP diagnostics and symbol index
 - semantic code search / embeddings
