@@ -86,6 +86,29 @@ DESKTOP
 command -v update-desktop-database >/dev/null 2>&1 &&
   update-desktop-database "$APP_DIR" >/dev/null 2>&1 || true
 
+# --- Desktop shortcut --------------------------------------------------------
+# The Desktop folder is localised (Masaüstü, Escritorio, ...), so ask xdg for
+# its real path before falling back to the usual English name.
+DESKTOP_DIR=""
+if command -v xdg-user-dir >/dev/null 2>&1; then
+  DESKTOP_DIR="$(xdg-user-dir DESKTOP 2>/dev/null || true)"
+fi
+if [ -z "$DESKTOP_DIR" ] || [ ! -d "$DESKTOP_DIR" ]; then
+  for candidate in "$HOME/Desktop" "$HOME/Masaüstü"; do
+    [ -d "$candidate" ] && DESKTOP_DIR="$candidate" && break
+  done
+fi
+
+if [ -n "$DESKTOP_DIR" ] && [ -d "$DESKTOP_DIR" ] && [ "$DESKTOP_DIR" != "$HOME" ]; then
+  install -m 755 "$APP_DIR/quarkcode.desktop" "$DESKTOP_DIR/quarkcode.desktop"
+  # GNOME hides launchers it does not consider trusted.
+  command -v gio >/dev/null 2>&1 &&
+    gio set "$DESKTOP_DIR/quarkcode.desktop" metadata::trusted true >/dev/null 2>&1 || true
+  say "Desktop shortcut: $DESKTOP_DIR/quarkcode.desktop"
+else
+  say "No Desktop folder found; QuarkCode is in the application menu instead."
+fi
+
 # --- Done --------------------------------------------------------------------
 
 say "Installed $BIN_DIR/quarkcode ($(du -h "$BIN_DIR/quarkcode" | cut -f1))"
