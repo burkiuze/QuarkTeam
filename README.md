@@ -1,6 +1,6 @@
 # QuarkCode + QuarkTeam
 
-**QuarkCode** is an AI-native desktop IDE shell built around **QuarkTeam**, an agentic software-engineering runtime. The goal is not to wrap a model in chat UI; the model can inspect the real workspace, delegate to specialists, edit files, run verification, review its own patch and repair problems before it finishes.
+**QuarkCode** is a session-based desktop app built around **QuarkTeam**, an agentic software-engineering runtime. The goal is not to wrap a model in chat UI; the model can inspect the real workspace, delegate to specialists, edit files, run verification, review its own patch and repair problems before it finishes.
 
 > A harness can make a weaker model much more useful through decomposition, tools, independent review and verification, but it cannot guarantee that an average model becomes equivalent to a specific frontier model on every task. QuarkTeam is designed to maximize the base model rather than fake a benchmark claim.
 
@@ -41,10 +41,17 @@ penceresinde vardır, tarayıcı sekmesi çalışma alanına erişemez ve uyarı
 
 ### 3. Bir model sağlayıcısı bağla
 
-QuarkCode hiçbir API anahtarı içermez. İlk açılışta sağ paneldeki ⚙ **AI settings**
-bölümünden sağlayıcı, model ve anahtarını gir; ayarlar işletim sisteminin uygulama veri
-klasörüne (`quarkcode-settings.json`) kaydedilir. Alternatif olarak proje kökünde bir
-`.env` dosyası kullanabilirsin:
+QuarkCode hiçbir API anahtarı ve hiçbir model listesi içermez. Composer'daki model
+seçiciden **Manage models**'i aç, sağlayıcını seç, anahtarını gir ve **Fetch models**'e
+bas: katalog sağlayıcının kendi `/models` ucundan gelir, ücretsiz olduğunu *sağlayıcının
+kendisi* bildiren (id'sinde free geçen ya da fiyatı sıfır olan) modeller **Free** rozeti
+alır. Ayarlar uygulama veri klasörüne (`quarkcode-settings.json`) kaydedilir.
+
+**Yerel modeller:** Ollama sağlayıcısı hazır gelir. Manage models > Ollama panelinde
+cihazında kurulu modeller boyutlarıyla listelenir; bir isim yazıp **Download** ile yenisini
+indirebilirsin (Linux'ta Ollama kurulu değilse panel kurulum komutunu gösterir).
+
+Alternatif olarak proje kökünde bir `.env` dosyası kullanabilirsin:
 
 ```bash
 cp .env.example .env
@@ -85,6 +92,8 @@ npm run dist       # kurulabilir masaüstü paketi
 | Belirti | Çözüm |
 | --- | --- |
 | "Desktop bridge not detected" uyarısı | Tarayıcı sekmesini kapat, `npm run dev` ile açılan Electron penceresini kullan. |
+| Model seçicide hiç model yok | Manage models'ten sağlayıcıya anahtar gir ve Fetch models'e bas. |
+| Ollama panelinde "No Ollama daemon" | `ollama serve` çalıştır; Linux'ta kurulum komutu panelde yazıyor. |
 | "Connect an AI provider before starting Autopilot" | AI settings'ten anahtar gir veya yerel bir sağlayıcı seç. |
 | "No handler registered" / boş pencere | `npm run build` çalıştırıp `dist-electron/preload.cjs` dosyasının oluştuğunu doğrula. |
 | Port 5173 kullanımda | Çalışan diğer Vite sürecini kapat; port `strictPort` ile sabittir. |
@@ -96,11 +105,12 @@ npm run dist       # kurulabilir masaüstü paketi
 
 QuarkCode v0.3 includes:
 
-- Electron + React + TypeScript desktop workbench
-- Monaco editor
-- Project explorer
-- Integrated terminal
-- Right-side QuarkTeam panel
+- Electron + React + TypeScript desktop app
+- Session tabs, one conversation per task
+- Model picker grouped by provider, with Free badges and a free-only filter
+- Manage models: per-provider base URL, protocol, API key and catalogue
+- Local models through Ollama: what is installed, and one-click downloads
+- Monaco viewer for the files a run changed
 - **Safe Autopilot** that can operate on the opened workspace
 - Staged `inspect → council → plan → execute → verify → review → repair` loop
 - **Native provider tool calling** (OpenAI, Anthropic, Gemini and compatible

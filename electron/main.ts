@@ -5,12 +5,30 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { restoreCheckpoint, runAgenticTask } from "./agent-runtime.js";
+import { listLocalModels, ollamaStatus, pullModel } from "./ollama.js";
 import {
   discoverModels,
   providerComplete,
   PROVIDER_PRESETS,
+  type ModelInfo,
   type ProviderSettings,
 } from "./providers.js";
+
+/** One configured provider: credentials plus its cached model catalogue. */
+type ProviderAccount = {
+  providerId: string;
+  baseUrl: string;
+  protocol: ProviderSettings["protocol"];
+  apiKey: string;
+  models: ModelInfo[];
+  extraHeaders?: Record<string, string>;
+};
+
+type QuarkSettings = {
+  accounts: ProviderAccount[];
+  activeProviderId: string;
+  activeModel: string;
+};
 
 const execAsync = promisify(exec);
 const __filename = fileURLToPath(import.meta.url);
@@ -67,16 +85,100 @@ async function loadEnvFile() {
   }
 }
 
-function buildDefaultSettings(): ProviderSettings {
+function buildDefaultSettings(): QuarkSettings {
+  const providerId = process.env.QUARK_PROVIDER || "opencode-zen";
+  const preset = PROVIDER_PRESETS.find((item) => item.providerId === providerId);
+  const ollama = PROVIDER_PRESETS.find((item) => item.providerId === "ollama");
+
+  const accounts: ProviderAccount[] = [
+    {
+      providerId,
+      baseUrl: process.env.QUARK_BASE_URL || preset?.baseUrl || "https://opencode.ai/zen/v1",
+      protocol:
+        (process.env.QUARK_PROTOCOL as ProviderSettings["protocol"]) ||
+        preset?.protocol ||
+        "openai-responses",
+      apiKey: process.env.QUARK_API_KEY || "",
+      models: [],
+    },
+  ];
+
+  // Ollama ships configured so anything already downloaded on this machine
+  // shows up in the picker without setup.
+  if (ollama && providerId !== "ollama") {
+    accounts.push({
+      providerId: ollama.providerId,
+      baseUrl: ollama.baseUrl,
+      protocol: ollama.protocol,
+      apiKey: "",
+      models: [],
+    });
+  }
+
   return {
-    providerId: process.env.QUARK_PROVIDER || "opencode-zen",
-    baseUrl: process.env.QUARK_BASE_URL || "https://opencode.ai/zen/v1",
-    apiKey: process.env.QUARK_API_KEY || "",
-    model: process.env.QUARK_MODEL || "muse-spark-1.3-contributor-free",
-    protocol:
-      (process.env.QUARK_PROTOCOL as ProviderSettings["protocol"]) ||
-      "openai-responses",
-    extraHeaders: {},
+    accounts,
+    activeProviderId: providerId,
+    // Model ids are never guessed here; the picker fills in after discovery.
+    activeModel: process.env.QUARK_MODEL || "",
+  };
+}
+
+/** Collapses the multi-provider settings into the single account a run uses. */
+function resolveActive(settings: QuarkSettings): ProviderSettings {
+  const account =
+    settings.accounts.find((item) => item.providerId === settings.activeProviderId) ??
+    settings.accounts[0];
+  if (!account) throw new Error("No AI provider is configured. Open Manage models.");
+  return {
+    providerId: account.providerId,
+    baseUrl: account.baseUrl,
+    apiKey: account.apiKey,
+    model: settings.activeModel,
+    protocol: account.protocol,
+    extraHeaders: account.extraHeaders ?? {},
+  };
+}
+
+function sanitizeAccount(input: any): ProviderAccount | null {
+  const providerId = String(input?.providerId ?? "").trim();
+  if (!providerId) return null;
+  const preset = PROVIDER_PRESETS.find((item) => item.providerId === providerId);
+  return {
+    providerId,
+    baseUrl: String(input?.baseUrl ?? preset?.baseUrl ?? "").trim().replace(/\/+$/, ""),
+    protocol: input?.protocol ?? preset?.protocol ?? "openai-chat",
+    apiKey: String(input?.apiKey ?? "").trim(),
+    models: Array.isArray(input?.models)
+      ? input.models
+          .map((model: any) => ({
+            id: String(model?.id ?? ""),
+            label: String(model?.label ?? model?.id ?? ""),
+            free: Boolean(model?.free),
+          }))
+          .filter((model: ModelInfo) => model.id)
+      : [],
+    extraHeaders: input?.extraHeaders ?? {},
+  };
+}
+
+/** v0.3 stored one flat provider; keep those settings working. */
+function migrate(stored: any): QuarkSettings | null {
+  if (!stored || typeof stored !== "object" || Array.isArray(stored)) return null;
+  if (Array.isArray(stored.accounts)) {
+    const accounts = stored.accounts.map(sanitizeAccount).filter(Boolean) as ProviderAccount[];
+    if (!accounts.length) return null;
+    return {
+      accounts,
+      activeProviderId: String(stored.activeProviderId ?? accounts[0].providerId),
+      activeModel: String(stored.activeModel ?? ""),
+    };
+  }
+  const legacy = sanitizeAccount(stored);
+  if (!legacy) return null;
+  return {
+    accounts: [legacy],
+    activeProviderId: legacy.providerId,
+    activeModel: String(stored.model ?? ""),
   };
 }
 
@@ -84,21 +186,16 @@ function settingsPath() {
   return path.join(app.getPath("userData"), "quarkcode-settings.json");
 }
 
-async function readSettings(): Promise<ProviderSettings> {
-  const defaults = buildDefaultSettings();
+async function readSettings(): Promise<QuarkSettings> {
   try {
     const raw = await fs.readFile(settingsPath(), "utf8");
-    const stored = JSON.parse(raw);
-    if (!stored || typeof stored !== "object" || Array.isArray(stored)) {
-      return defaults;
-    }
-    return { ...defaults, ...stored };
+    return migrate(JSON.parse(raw)) ?? buildDefaultSettings();
   } catch {
-    return defaults;
+    return buildDefaultSettings();
   }
 }
 
-async function saveSettings(next: ProviderSettings) {
+async function saveSettings(next: QuarkSettings) {
   await fs.mkdir(path.dirname(settingsPath()), { recursive: true });
   await fs.writeFile(settingsPath(), JSON.stringify(next, null, 2), "utf8");
 }
@@ -274,24 +371,34 @@ app.whenReady().then(async () => {
   ipcMain.handle("settings:get", () => readSettings());
   ipcMain.handle("providers:list", async () => PROVIDER_PRESETS);
 
-  ipcMain.handle("settings:set", async (_event, next: ProviderSettings) => {
-    if (!next || typeof next !== "object") {
-      throw new Error("Invalid provider settings payload.");
-    }
-    const clean: ProviderSettings = {
-      providerId: next.providerId?.trim() || "custom-openai",
-      baseUrl: (next.baseUrl ?? "").trim().replace(/\/+$/, ""),
-      apiKey: (next.apiKey ?? "").trim(),
-      model: (next.model ?? "").trim(),
-      protocol: next.protocol ?? "openai-chat",
-      extraHeaders: next.extraHeaders ?? {},
-    };
-    await saveSettings(clean);
-    return clean;
+  ipcMain.handle("settings:set", async (_event, next: QuarkSettings) => {
+    const migrated = migrate(next);
+    if (!migrated) throw new Error("Invalid provider settings payload.");
+    await saveSettings(migrated);
+    return migrated;
   });
 
-  ipcMain.handle("providers:models", async () => {
-    return discoverModels(await readSettings());
+  /**
+   * Refreshes one provider's catalogue and stores it, so the model picker can
+   * list every configured provider without a request per keystroke.
+   */
+  ipcMain.handle("providers:refresh", async (_event, providerId: string) => {
+    const settings = await readSettings();
+    const account = settings.accounts.find((item) => item.providerId === providerId);
+    if (!account) throw new Error(`Provider ${providerId} is not configured.`);
+
+    const models = await discoverModels({
+      providerId: account.providerId,
+      baseUrl: account.baseUrl,
+      apiKey: account.apiKey,
+      model: "",
+      protocol: account.protocol,
+      extraHeaders: account.extraHeaders,
+    });
+
+    account.models = models;
+    await saveSettings(settings);
+    return settings;
   });
 
   ipcMain.handle(
@@ -300,10 +407,10 @@ app.whenReady().then(async () => {
       _event,
       payload: { system: string; user: string; temperature?: number },
     ) => {
-      const settings = await readSettings();
+      const settings = resolveActive(await readSettings());
       if (requiresApiKey(settings)) {
         throw new Error(
-          "No provider credential configured. Open QuarkCode AI settings and connect your provider.",
+          "No provider credential configured. Open Manage models and connect your provider.",
         );
       }
       return providerComplete(settings, payload);
@@ -324,10 +431,11 @@ app.whenReady().then(async () => {
       },
     ) => {
       const root = requireWorkspace();
-      const settings = await readSettings();
+      const settings = resolveActive(await readSettings());
       if (requiresApiKey(settings)) {
         throw new Error("Connect an AI provider before starting Autopilot.");
       }
+      if (!settings.model) throw new Error("Pick a model before starting Autopilot.");
       const goal = payload?.goal?.trim();
       if (!goal) throw new Error("Describe what QuarkTeam should do.");
       return runAgenticTask({
@@ -339,6 +447,25 @@ app.whenReady().then(async () => {
       });
     },
   );
+
+  ipcMain.handle("ollama:status", async (_event, baseUrl?: string) => ollamaStatus(baseUrl));
+
+  /** Local models are whatever the daemon has already downloaded. */
+  ipcMain.handle("ollama:list", async (_event, baseUrl?: string) => {
+    const models = await listLocalModels(baseUrl);
+    const settings = await readSettings();
+    const account = settings.accounts.find((item) => item.providerId === "ollama");
+    if (account) {
+      account.models = models.map(({ id, label, free }) => ({ id, label, free }));
+      await saveSettings(settings);
+    }
+    return models;
+  });
+
+  ipcMain.handle("ollama:pull", async (_event, model: string, baseUrl?: string) => {
+    await pullModel(requireWindow(), model, baseUrl);
+    return listLocalModels(baseUrl);
+  });
 
   ipcMain.handle("agent:revert", async (_event, checkpointId: string) => {
     const root = requireWorkspace();

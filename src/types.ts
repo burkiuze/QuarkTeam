@@ -20,6 +20,51 @@ export type ProviderSettings = {
   extraHeaders?: Record<string, string>;
 };
 
+export type ModelInfo = {
+  id: string;
+  label: string;
+  free: boolean;
+};
+
+/** One configured provider: credentials plus its cached model catalogue. */
+export type ProviderAccount = {
+  providerId: string;
+  baseUrl: string;
+  protocol: ProviderProtocol;
+  apiKey: string;
+  models: ModelInfo[];
+  extraHeaders?: Record<string, string>;
+};
+
+export type LocalModel = ModelInfo & {
+  size: number;
+  parameterSize?: string;
+  quantization?: string;
+};
+
+export type OllamaStatus = {
+  reachable: boolean;
+  baseUrl: string;
+  version?: string;
+  error?: string;
+  installHint?: string;
+};
+
+export type PullProgress = {
+  model: string;
+  status: string;
+  completed?: number;
+  total?: number;
+  done: boolean;
+  error?: string;
+};
+
+export type QuarkSettings = {
+  accounts: ProviderAccount[];
+  activeProviderId: string;
+  activeModel: string;
+};
+
 export type ProviderPreset = Omit<ProviderSettings, "apiKey" | "model"> & {
   name: string;
   defaultModel?: string;
@@ -62,10 +107,11 @@ export type QuarkBridge = {
     command: string,
     cwd?: string,
   ): Promise<{ stdout: string; stderr: string }>;
-  getSettings(): Promise<ProviderSettings>;
-  setSettings(settings: ProviderSettings): Promise<ProviderSettings>;
+  getSettings(): Promise<QuarkSettings>;
+  setSettings(settings: QuarkSettings): Promise<QuarkSettings>;
   listProviders(): Promise<ProviderPreset[]>;
-  discoverModels(): Promise<string[]>;
+  /** Re-reads one provider's catalogue and returns the updated settings. */
+  refreshProvider(providerId: string): Promise<QuarkSettings>;
   complete(payload: {
     system: string;
     user: string;
@@ -82,6 +128,10 @@ export type QuarkBridge = {
   revertCheckpoint(
     checkpointId: string,
   ): Promise<{ checkpointId: string; restoredFiles: string[] }>;
+  ollamaStatus(baseUrl?: string): Promise<OllamaStatus>;
+  listLocalModels(baseUrl?: string): Promise<LocalModel[]>;
+  pullLocalModel(model: string, baseUrl?: string): Promise<LocalModel[]>;
+  onPullProgress(listener: (progress: PullProgress) => void): () => void;
   onAgentEvent(listener: (event: AgentEvent) => void): () => void;
 };
 

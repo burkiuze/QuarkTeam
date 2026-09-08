@@ -13,6 +13,12 @@ export type ProviderSettings = {
   extraHeaders?: Record<string, string>;
 };
 
+export type ModelInfo = {
+  id: string;
+  label: string;
+  free: boolean;
+};
+
 export type ProviderPreset = Omit<ProviderSettings, "apiKey" | "model"> & {
   name: string;
   defaultModel?: string;
@@ -27,9 +33,9 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
     name: "OpenCode Zen",
     baseUrl: "https://opencode.ai/zen/v1",
     protocol: "openai-responses",
-    defaultModel: "muse-spark-1.3-contributor-free",
-    modelsHint: ["muse-spark-1.3-contributor-free"],
-    note: "Includes the current Muse Spark 1.3 Contributor Free route when your Zen account is eligible.",
+    // No model ids are hard-coded: which routes exist, and which of them are
+    // free, is decided by the account and changes without a QuarkCode release.
+    note: "Add your Zen key and press Fetch models. Routes the listing marks as free, or prices at zero, get a Free badge.",
   },
   {
     providerId: "openai",
@@ -762,31 +768,111 @@ export async function providerComplete(
   return result.text;
 }
 
-export async function discoverModels(settings: ProviderSettings): Promise<string[]> {
-  if (!settings.baseUrl?.trim()) return [];
+const FREE_HINTS = ["free", "contributor", "no-cost", "trial"];
+
+/**
+ * Providers advertise a free tier in two ways: a marker in the model id, or a
+ * zero price in the listing. Both are checked so the picker can label them.
+ */
+export function isFreeModel(model: any): boolean {
+  const id = String(model?.id ?? model ?? "").toLowerCase();
+  if (FREE_HINTS.some((hint) => id.includes(hint))) return true;
+
+  const pricing = model?.pricing ?? model?.cost ?? model?.price;
+  if (pricing && typeof pricing === "object") {
+    const values = [
+      pricing.prompt,
+      pricing.completion,
+      pricing.input,
+      pricing.output,
+      pricing.input_per_million,
+      pricing.output_per_million,
+    ]
+      .filter((value) => value !== undefined && value !== null)
+      .map(Number)
+      .filter((value) => Number.isFinite(value));
+    if (values.length && values.every((value) => value === 0)) return true;
+  }
+
+  if (model?.free === true || model?.is_free === true) return true;
+  return false;
+}
+
+const KEEP_UPPER = new Set(["ai", "gpt", "llm", "vl", "moe", "hd", "xl", "nim", "glm", "r1", "v2", "v3"]);
+
+/** "muse-spark-1.3-contributor-free" -> "Muse Spark 1.3 Contributor Free" */
+export function modelLabel(id: string) {
+  const tail = id.includes("/") ? id.slice(id.lastIndexOf("/") + 1) : id;
+  return (
+    tail
+      .split(/[-_.\s]+/)
+      .filter(Boolean)
+      .map((part) => {
+        if (/^\d+(\.\d+)?$/.test(part)) return part;
+        if (KEEP_UPPER.has(part.toLowerCase())) return part.toUpperCase();
+        return part.charAt(0).toUpperCase() + part.slice(1);
+      })
+      .join(" ") || id
+  );
+}
+
+export async function discoverModels(settings: ProviderSettings): Promise<ModelInfo[]> {
+  if (!settings.baseUrl?.trim()) {
+    throw new Error("Set a base URL before discovering models.");
+  }
   const base = settings.baseUrl.replace(/\/+$/, "");
 
-  const get = (url: string, headers?: Record<string, string>) =>
-    fetch(url, { headers, signal: AbortSignal.timeout(DISCOVERY_TIMEOUT_MS) });
-
-  try {
-    if (settings.protocol === "gemini") {
-      if (!settings.apiKey) return [];
-      const response = await get(`${base}/models?key=${encodeURIComponent(settings.apiKey)}`);
-      if (!response.ok) return [];
-      const data = (await response.json()) as any;
-      return (data?.models ?? [])
-        .map((model: any) => String(model?.name ?? "").replace(/^models\//, ""))
-        .filter(Boolean);
-    }
-
-    // Anthropic exposes GET /v1/models with the same x-api-key auth.
-    const response = await get(`${base}/models`, authHeaders(settings));
-    if (!response.ok) return [];
-    const data = (await response.json()) as any;
-    return (data?.data ?? []).map((model: any) => String(model?.id ?? "")).filter(Boolean);
-  } catch {
-    // Discovery is a convenience; an offline or slow endpoint is not an error.
-    return [];
+  if (settings.protocol === "gemini" && !settings.apiKey) {
+    throw new Error("Google AI Studio requires an API key to list models.");
   }
+
+  const url =
+    settings.protocol === "gemini"
+      ? `${base}/models?key=${encodeURIComponent(settings.apiKey)}`
+      : `${base}/models`;
+
+  let response: Response;
+  try {
+    // Anthropic exposes GET /v1/models with the same x-api-key auth, so every
+    // protocol except Gemini uses the standard listing endpoint.
+    response = await fetch(url, {
+      headers: settings.protocol === "gemini" ? undefined : authHeaders(settings),
+      signal: AbortSignal.timeout(DISCOVERY_TIMEOUT_MS),
+    });
+  } catch (error) {
+    const reason =
+      error instanceof Error && error.name === "TimeoutError" ? "timed out" : String(error);
+    throw new Error(`Could not reach ${base}/models (${reason}).`);
+  }
+
+  if (!response.ok) {
+    const body = (await response.text()).slice(0, 240);
+    throw new Error(
+      `${settings.providerId} model listing failed (${response.status}). ${body || "This endpoint may not expose /models; type the model name instead."}`,
+    );
+  }
+
+  let data: any;
+  try {
+    data = await response.json();
+  } catch {
+    throw new Error(`${settings.providerId} returned a non-JSON model list.`);
+  }
+
+  const raw: any[] =
+    settings.protocol === "gemini"
+      ? (data?.models ?? []).map((model: any) => ({
+          ...model,
+          id: String(model?.name ?? "").replace(/^models\//, ""),
+        }))
+      : (data?.data ?? data?.models ?? []);
+
+  const seen = new Set<string>();
+  return raw
+    .map((model) => {
+      const id = String(model?.id ?? model ?? "");
+      return { id, label: modelLabel(id), free: isFreeModel(model) };
+    })
+    .filter((model) => model.id && !seen.has(model.id) && seen.add(model.id))
+    .sort((a, b) => (a.free === b.free ? a.label.localeCompare(b.label) : a.free ? -1 : 1));
 }
