@@ -736,6 +736,48 @@ button {
   background: #101012;
 }
 
+.plan-panel {
+  padding: 8px 10px;
+  border-bottom: 1px solid #202024;
+  background: #0d0d0f;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  max-height: 150px;
+  overflow-y: auto;
+}
+
+.plan-heading {
+  color: #62626d;
+  font-size: 9px;
+  letter-spacing: 0.08em;
+  margin-bottom: 2px;
+}
+
+.plan-step {
+  font-family: "JetBrains Mono", "SFMono-Regular", Consolas, monospace;
+  font-size: 10px;
+  line-height: 1.5;
+  color: #83838d;
+  white-space: pre-wrap;
+}
+
+.plan-step.active {
+  color: #e6e6ec;
+}
+
+.plan-step.done {
+  color: #4f8f5a;
+}
+
+.plan-step.blocked {
+  color: #c46b6b;
+}
+
+.trace-row.plan strong {
+  color: #8a8ad0;
+}
+
 .bridge-warning {
   display: flex;
   align-items: flex-start;

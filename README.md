@@ -92,9 +92,9 @@ npm run dist       # kurulabilir masaüstü paketi
 
 ---
 
-## v0.2 Agentic runtime
+## v0.3 Agentic runtime
 
-QuarkCode v0.2 includes:
+QuarkCode v0.3 includes:
 
 - Electron + React + TypeScript desktop workbench
 - Monaco editor
@@ -102,22 +102,33 @@ QuarkCode v0.2 includes:
 - Integrated terminal
 - Right-side QuarkTeam panel
 - **Safe Autopilot** that can operate on the opened workspace
-- Staged `inspect → council → execute → review → repair` loop
-- Parallel background council in Team/Swarm mode
+- Staged `inspect → council → plan → execute → verify → review → repair` loop
+- **Native provider tool calling** (OpenAI, Anthropic, Gemini and compatible
+  gateways) with automatic fallback to a JSON action protocol
+- Parallel background council in Team/Swarm mode, feeding a seeded plan
+- Live plan state the model must keep current
+- **Verification gate**: a run cannot declare success on unverified edits
+- Read-before-write enforcement and whitespace-tolerant editing
+- Repeated-call detection that breaks stuck loops
+- Context compaction that never drops the task or the plan
 - On-demand specialist delegation during execution
 - Workspace skill discovery
 - Project guidance loading (`AGENTS.md`, `CLAUDE.md`, `QUARK.md`, `.quark/rules.md`, Copilot instructions)
 - File/search tools:
   - `list_files`
-  - `read_file`
+  - `read_file` (line-numbered, range-aware)
   - `read_many`
-  - `search_text`
+  - `search_text` (literal or regex, glob filter, context lines)
   - `write_file`
-  - `replace_in_file`
+  - `edit_file` (replace / insert_before / insert_after / append)
 - Verification tools:
   - `run_command`
+  - `run_checks` (auto-detected project typecheck/lint/test)
   - `git_diff`
   - `git_status`
+- Coordination tools:
+  - `update_plan`
+  - `finish`
 - Skill/subagent tools:
   - `list_skills`
   - `read_skill`
@@ -135,6 +146,25 @@ the workspace to its pre-run state (created files are deleted again). Those snap
 running app only; they do not survive a restart.
 
 A future Full Autopilot mode can expose broader command execution behind explicit user approval.
+
+## Why the harness matters
+
+A harness cannot turn a small model into a frontier model. What it can do is
+remove the failure modes that cost a weaker model most of its accuracy, and that
+is exactly what v0.3 targets:
+
+| Failure mode | What QuarkTeam does about it |
+| --- | --- |
+| Malformed tool calls | Native function calling when the provider supports it; a documented JSON protocol, with lenient parsing, when it does not |
+| Editing a file it never read | `write_file`/`edit_file` reject the edit and say so |
+| Exact-string edits that miss by whitespace | `edit_file` retries whitespace-insensitively and reports the closest lines on a miss |
+| "It should work now" | `finish` is rejected while edits are unverified; `run_checks` runs the project's real commands |
+| Losing the task on long runs | The briefing and plan are re-sent every turn; only the middle of the history is elided |
+| Getting stuck in a loop | Identical repeated calls are blocked with a nudge to change approach |
+| Forgetting half the request | A seeded plan is kept in the system prompt and must be resolved before finishing |
+| Transient provider errors | Retries with backoff; a run is never discarded because one call failed |
+
+Measure it on your own repository tasks rather than trusting the list.
 
 ## Providers
 
@@ -217,25 +247,27 @@ The executor can list and load them during a task instead of bloating every prom
 
 ### Fast
 
-Minimal orchestration for cheap/quick work.
+Minimal orchestration for cheap/quick work. No council, no patch review.
 
 ```text
-workspace → executor → verify
+workspace → executor (plan/edit/verify) → done
 ```
 
 ### Team
 
-Adds parallel scout/reviewer context and independent patch review.
+Adds a two-role council, a seeded plan and an independent patch review with a
+bounded repair pass.
 
 ### Swarm
 
-Runs a broader council (repository scout, architect, adversarial reviewer, test engineer), then gives the executor on-demand subagent delegation and finishes with an independent diff-review/repair pass.
+Runs a broader council (repository scout, architect, adversarial reviewer, test
+engineer), seeds the plan from it, gives the executor on-demand subagent
+delegation, and finishes with an independent diff review plus repair pass.
 
 ## What still needs to land before calling this production-grade
 
 v0.2 is a substantially more agentic foundation, but the roadmap is intentionally explicit:
 
-- native structured function calling per provider instead of the current cross-provider JSON action protocol
 - per-role model routing and fallback chains
 - durable (on-disk, restart-surviving) checkpoint history
 - side-by-side AI diff Accept/Reject

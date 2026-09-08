@@ -156,6 +156,7 @@ function App() {
   const [agentEvents, setAgentEvents] = useState<AgentEvent[]>([]);
   const [showSettings, setShowSettings] = useState(false);
   const [lastRun, setLastRun] = useState<{ checkpointId: string; files: string[] } | null>(null);
+  const [plan, setPlan] = useState<string[]>([]);
   const bridgeReady = useMemo(() => hasBridge(), []);
   const chatEndRef = useRef<HTMLDivElement | null>(null);
   const [providers, setProviders] = useState<ProviderPreset[]>([]);
@@ -183,6 +184,9 @@ function App() {
 
     return quark.onAgentEvent((event) => {
       setAgentEvents((prev) => [...prev.slice(-50), event]);
+      if (event.type === "plan" && event.detail) {
+        setPlan(event.detail.split("\n").filter(Boolean));
+      }
     });
   }, [bridgeReady]);
 
@@ -321,6 +325,7 @@ function App() {
     setMessages((prev) => [...prev, { role: "user", content: goal }]);
     setBusy(true);
     setAgentEvents([]);
+    setPlan([]);
     setAgentStates(agentRoster(mode));
 
     try {
@@ -330,7 +335,7 @@ function App() {
           options: {
             quality: mode,
             mode: "safe",
-            maxSteps: mode === "fast" ? 20 : mode === "team" ? 34 : 46,
+            maxSteps: mode === "fast" ? 24 : mode === "team" ? 40 : 56,
           },
         });
         await refreshWorkspace();
@@ -342,9 +347,15 @@ function App() {
         const changed = result.changedFiles.length
           ? `\n\nChanged: ${result.changedFiles.join(", ")}`
           : "\n\nNo files changed.";
+        const verified =
+          result.verified === true
+            ? "\nChecks: passed."
+            : result.verified === false
+              ? "\nChecks: FAILED — review the diff before trusting this run."
+              : "";
         setMessages((prev) => [
           ...prev,
-          { role: "assistant", content: `${result.answer}${changed}` },
+          { role: "assistant", content: `${result.answer}${changed}${verified}` },
         ]);
       } else {
         const answer = await runQuarkTeam(
@@ -671,6 +682,20 @@ function App() {
               </button>
             ))}
           </div>
+
+          {autopilot && plan.length ? (
+            <div className="plan-panel">
+              <div className="plan-heading">PLAN</div>
+              {plan.map((step, index) => (
+                <div
+                  className={`plan-step ${step.startsWith("[x]") ? "done" : step.startsWith("[~]") ? "active" : step.startsWith("[!]") ? "blocked" : ""}`}
+                  key={`${index}-${step}`}
+                >
+                  {step}
+                </div>
+              ))}
+            </div>
+          ) : null}
 
           {autopilot ? (
             <div className="agent-trace">

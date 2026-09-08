@@ -1,8 +1,8 @@
 {
   "name": "quarkcode",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "private": true,
-  "description": "QuarkCode - AI-native desktop IDE powered by the QuarkTeam multi-agent software crew.",
+  "description": "QuarkCode - AI-native desktop IDE powered by the QuarkTeam agentic engineering harness.",
   "author": {
     "name": "QuarkTeam"
   },

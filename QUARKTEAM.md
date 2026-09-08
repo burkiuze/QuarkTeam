@@ -9,7 +9,7 @@ QuarkTeam is a model-agnostic engineering harness. Its purpose is to make a mode
 ```text
 User goal
   │
-  ├─ workspace scan
+  ├─ workspace scan + verification-command detection
   ├─ project rules + portable skills
   │
   ├─ parallel background council
@@ -17,21 +17,24 @@ User goal
   │    ├─ architect
   │    ├─ adversarial reviewer
   │    └─ test engineer
-  │
+  │         │
+  │         ▼
+  │    seeded plan
   ▼
-Quark Executor
+Quark Executor (one tool call per step)
   │
-  ├─ read/search workspace
+  ├─ read/search workspace        (read-before-write enforced)
+  ├─ update_plan                  (plan echoed back every turn)
+  ├─ edit files                   (whitespace-tolerant matching)
+  ├─ run_checks                   (project's own typecheck/lint/test)
   ├─ delegate specialist subagents on demand
-  ├─ edit files
-  ├─ run build/test/lint/typecheck
-  └─ inspect git diff
+  └─ finish                       (gated on verification + plan closure)
        │
        ▼
 Independent Prism review
        │
-       ├─ approved → finish
-       └─ findings → bounded repair loop → finish
+       ├─ approved → done
+       └─ findings → bounded repair loop → done
 ```
 
 Fast mode skips most council calls. Team mode uses a smaller council. Swarm mode uses all background roles.
@@ -56,19 +59,46 @@ This keeps the orchestration layer independent from provider-specific request fo
 
 ## Agent action protocol
 
-For v0.2 the executor uses a strict provider-neutral JSON action protocol:
+The executor prefers each provider's **native function calling**: OpenAI Chat
+`tools`/`tool_calls`, OpenAI Responses `function_call` items, Anthropic
+`tool_use`/`tool_result` and Gemini `functionDeclarations`. Conversation state is
+a real message history, so tool results are attributed to the calls that
+produced them.
+
+When an endpoint rejects function calling, that rejection is remembered for the
+session and the executor falls back to a documented JSON protocol in the system
+prompt:
 
 ```json
-{"kind":"tool","tool":"read_file","args":{"path":"src/App.tsx"},"reason":"inspect before editing"}
+{"tool":"read_file","args":{"path":"src/App.tsx"}}
 ```
 
-or:
+The fallback parser accepts a bare object, a fenced block or an object embedded
+in prose, and the v0.2 `{"kind":"final","answer":"..."}` shape still works. A
+turn with no parsable action is nudged rather than treated as fatal.
 
-```json
-{"kind":"final","answer":"Implemented and verified ..."}
-```
+The same adaptive mechanism handles endpoints that reject `temperature`.
 
-This works even on providers that do not expose identical native function-calling schemas. Native tool calling is still preferable and is a planned optimization.
+## Reliability mechanisms
+
+The harness assumes the model will make ordinary mistakes and makes each one
+recoverable rather than fatal:
+
+- **Read-before-write.** Rewriting or editing a file that was never read in this
+  run is rejected with an explanation.
+- **Forgiving edits.** `edit_file` matches exactly, then whitespace-insensitively;
+  ambiguous matches report their line numbers and misses report the closest
+  existing lines.
+- **Verification gate.** `finish` is refused while edits are unverified, and
+  again while plan steps are open. The gate releases after a few attempts so a
+  project without usable checks cannot deadlock.
+- **Loop breaking.** An identical repeated tool call is answered with a nudge
+  instead of being re-executed.
+- **Context compaction.** The task briefing stays pinned; only the middle of the
+  history is elided, and a tool result is never sent without the assistant turn
+  that produced it.
+- **Failure tolerance.** Provider errors are retried with backoff; council and
+  review failures degrade to a warning rather than discarding completed work.
 
 ## Tool policy
 
@@ -109,13 +139,12 @@ This can materially improve reliability, but it is not a mathematical capability
 
 ## Next architecture milestones
 
-1. Native provider tool-calling adapters
-2. Model router with role-specific models and failover
-3. Durable checkpoints + rollback (currently in-session only)
-4. Diff approval UX
-5. MCP
-6. LSP/symbol graph
-7. persistent memory + context compaction
-8. worktree-isolated parallel implementers
-9. background tasks and resumable sessions
-10. evaluation harness and regression suite
+1. Model router with role-specific models and failover
+2. Durable checkpoints + rollback (currently in-session only)
+3. Diff approval UX
+4. MCP
+5. LSP/symbol graph
+6. persistent cross-session memory
+7. worktree-isolated parallel implementers
+8. background tasks and resumable sessions
+9. evaluation harness and regression suite

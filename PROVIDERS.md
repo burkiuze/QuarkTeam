@@ -30,6 +30,22 @@ QuarkCode separates **provider preset** from **wire protocol**. A provider that 
 | llama.cpp server | OpenAI Chat | Local |
 | Custom | OpenAI Chat | User-supplied URL |
 
+## Tool calling
+
+Each protocol is mapped to its native function-calling shape:
+
+| Protocol | Request | Response |
+| --- | --- | --- |
+| OpenAI Chat | `tools[].function` | `message.tool_calls[]` |
+| OpenAI Responses | `tools[]` | `output[].function_call` |
+| Anthropic Messages | `tools[].input_schema` | `content[].tool_use` |
+| Gemini | `tools[].functionDeclarations` | `parts[].functionCall` |
+
+An endpoint that rejects `tools` (or `temperature`) is detected from its 400
+response, remembered for the session, and retried without that field. Providers
+with no function calling therefore still run the full agent loop through the
+JSON action protocol.
+
 ## Providers that need richer auth
 
 AWS Bedrock, Google Vertex AI, Azure variants, GitHub Copilot OAuth and some enterprise gateways have provider-specific auth/signing behavior. The current v0.2 transport can use them through a compatible gateway, but true first-class auth adapters are a roadmap item rather than pretending one generic API-key field covers every enterprise provider.

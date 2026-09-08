@@ -30,10 +30,16 @@ export type ProviderPreset = Omit<ProviderSettings, "apiKey" | "model"> & {
 
 export type AgentEvent = {
   runId: string;
-  type: "phase" | "tool" | "result" | "warning" | "done";
+  type: "phase" | "tool" | "result" | "warning" | "plan" | "done";
   label: string;
   detail?: string;
   ts: number;
+};
+
+export type PlanStep = {
+  id: number;
+  title: string;
+  status: "pending" | "active" | "done" | "blocked";
 };
 
 export type AgenticResult = {
@@ -42,6 +48,9 @@ export type AgenticResult = {
   answer: string;
   changedFiles: string[];
   diff: string;
+  plan: PlanStep[];
+  /** null when the project exposes no automated checks. */
+  verified: boolean | null;
 };
 
 export type QuarkBridge = {
