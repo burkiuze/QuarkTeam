@@ -1,6 +1,6 @@
 {
   "name": "quarkcode",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "private": true,
   "description": "QuarkCode - AI-native desktop IDE powered by the QuarkTeam agentic engineering harness.",
   "author": {

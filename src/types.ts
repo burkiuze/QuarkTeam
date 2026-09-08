@@ -148,7 +148,14 @@ export type AgentRunState = {
   status: AgentStatus;
 };
 
-export type Effort = "economic" | "medium" | "high" | "extra" | "max" | "ultracode";
+export type Effort =
+  | "auto"
+  | "economic"
+  | "medium"
+  | "high"
+  | "extra"
+  | "max"
+  | "ultracode";
 
 /** Kept for the advisory orchestrator, which still thinks in three tiers. */
 export type TeamMode = "fast" | "team" | "swarm";

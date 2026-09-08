@@ -29,6 +29,7 @@ import {
   type AgentEvent,
   type Effort,
   type EffortProfile,
+  type EffortProfileId,
   type PlanStep,
   type ToolContext,
 } from "./agent-tools.js";
@@ -89,6 +90,11 @@ ${renderToolDocs()}`
       : "No verification has run yet.";
 
   return `You are Quark Executor, the coding member of QuarkTeam. You operate a real local workspace through tools, one step at a time.
+
+THE TASK, VERBATIM
+${ctx.goal}
+
+Every constraint in that text — resource limits, versions, file layout, "do not touch X" — is a requirement, not a suggestion. If one cannot be met, say so in finish instead of quietly ignoring it.
 
 ${protocol}
 
@@ -543,6 +549,53 @@ const REVIEWER_ANGLES = [
   "security, resource handling and edge cases the first reviewer would miss",
 ];
 
+type Triage =
+  | { kind: "chat"; answer: string }
+  | { kind: "work"; size: "small" | "large" };
+
+/**
+ * One cheap call that decides what the message actually is. A greeting used to
+ * start a full agent run — tools, verification gate and all — and answer with a
+ * report about an empty workspace. Chat should cost one call and read like a
+ * reply; only real work should pay for the crew.
+ */
+async function triage(
+  settings: ProviderSettings,
+  goal: string,
+  tree: string,
+  onUsage: (usage: TokenUsage) => void,
+): Promise<Triage> {
+  try {
+    const reply = await providerComplete(
+      settings,
+      {
+        system: `You sort incoming messages for a coding assistant.
+
+If the message is a greeting, small talk, a thank-you, or a question that can be answered without reading or changing the project, reply with:
+CHAT: <your reply, in the same language as the message, at most three sentences>
+
+If it asks for work on the project (writing, changing, reviewing, explaining specific code, running something), reply with exactly one of:
+WORK: small
+WORK: large
+
+"small" means a focused change of a few files. "large" means a new app, a feature spanning many files, or an open-ended investigation. Reply with nothing else.`,
+        user: `MESSAGE\n${goal}\n\nPROJECT FILES (may be empty)\n${tree.slice(0, 1_500) || "(empty workspace)"}`,
+        temperature: 0,
+      },
+      onUsage,
+    );
+
+    const trimmed = reply.trim();
+    const chat = trimmed.match(/^CHAT:\s*([\s\S]+)/i);
+    if (chat) return { kind: "chat", answer: chat[1].trim() };
+    if (/^WORK:\s*large/i.test(trimmed)) return { kind: "work", size: "large" };
+    if (/^WORK:\s*small/i.test(trimmed)) return { kind: "work", size: "small" };
+  } catch {
+    // Triage is an optimisation; if it fails the run proceeds normally.
+  }
+  return { kind: "work", size: "large" };
+}
+
 async function reviewDiff(
   settings: ProviderSettings,
   goal: string,
@@ -618,8 +671,7 @@ export async function runAgenticTask(input: {
   // a weaker model is the cheapest lever a run has.
   const helper = input.helperSettings ?? input.settings;
   const runId = randomUUID();
-  const effort: Effort = input.options?.effort ?? "high";
-  const profile: EffortProfile = EFFORT_PROFILES[effort] ?? EFFORT_PROFILES.high;
+  const effort: Effort = input.options?.effort ?? "auto";
   const mode = input.options?.mode ?? "safe";
 
   const emit = (event: Omit<AgentEvent, "runId" | "ts">) => {
@@ -636,7 +688,7 @@ export async function runAgenticTask(input: {
     usage = addUsage(usage, next);
   };
 
-  emit({ type: "phase", label: "Inspecting workspace" });
+  emit({ type: "phase", label: "Reading the request" });
   const [tree, guidance, skills, checks] = await Promise.all([
     walk(input.root).then((lines) => lines.join("\n")),
     projectGuidance(input.root),
@@ -644,8 +696,34 @@ export async function runAgenticTask(input: {
     detectChecks(input.root),
   ]);
 
+  // Chat is answered in one call; work is sized before the crew is assembled.
+  const verdict = await triage(helper, input.goal, tree, onUsage);
+  if (verdict.kind === "chat") {
+    emit({ type: "done", label: "Answered directly", detail: "no workspace changes" });
+    return {
+      runId,
+      checkpointId: "",
+      answer: verdict.answer,
+      changedFiles: [],
+      diff: "",
+      plan: [],
+      verified: null,
+      usage,
+    };
+  }
+
+  const resolved: EffortProfileId =
+    effort === "auto" ? (verdict.size === "small" ? "economic" : "high") : effort;
+  const profile: EffortProfile = EFFORT_PROFILES[resolved] ?? EFFORT_PROFILES.high;
+  emit({
+    type: "phase",
+    label: `${profile.label} effort`,
+    detail: effort === "auto" ? `chosen for a ${verdict.size} task` : undefined,
+  });
+
   const ctx: ToolContext = {
     root: input.root,
+    goal: input.goal,
     mode,
     settings: input.settings,
     emit,

@@ -110,7 +110,7 @@ function App() {
   const [activeId, setActiveId] = useState<string>("");
   const [prompt, setPrompt] = useState("");
   const [busy, setBusy] = useState(false);
-  const [effort, setEffort] = useState<Effort>("high");
+  const [effort, setEffort] = useState<Effort>("auto");
   const [autopilot, setAutopilot] = useState(true);
   const [showManage, setShowManage] = useState(false);
   const [refreshing, setRefreshing] = useState<string | null>(null);
@@ -316,7 +316,7 @@ function App() {
         }));
       } else {
         const advisoryMode: TeamMode =
-          effort === "economic" || effort === "medium"
+          effort === "auto" || effort === "economic" || effort === "medium"
             ? "fast"
             : effort === "high" || effort === "extra"
               ? "team"

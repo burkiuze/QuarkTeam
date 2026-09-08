@@ -205,6 +205,7 @@ Effort is a real dial, not a label. Each level changes how much work runs:
 
 | Level | Executor turns | Advisers | Planner | Reviewers |
 | --- | --- | --- | --- | --- |
+| Auto (default) | sized per request | | | |
 | Economic | 16 | — | — | — |
 | Medium | 28 | — | — | 1 |
 | High | 40 | 2 | — | 1 |
@@ -213,6 +214,18 @@ Effort is a real dial, not a label. Each level changes how much work runs:
 | Ultracode | 120 | 4 | yes | 2 (different angles) |
 
 The gauge next to the composer sets it, and its colour tracks the level.
+
+**Auto** is the default and runs a triage step first — one cheap call that
+decides what the message actually is:
+
+- a greeting, a thank-you or a question that needs no repository work is
+  **answered directly, in one call**, with no tools, no plan and no
+  verification report;
+- a focused change runs at Economic;
+- a new app or an open-ended investigation runs at High.
+
+Picking a level explicitly skips the sizing but keeps the triage, so a greeting
+never starts an agent run at any level.
 
 ## Why the harness matters
 

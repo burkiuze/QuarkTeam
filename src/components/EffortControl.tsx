@@ -13,6 +13,12 @@ export const EFFORT_LEVELS: Array<{
   summary: string;
 }> = [
   {
+    id: "auto",
+    label: "Auto",
+    colour: "#7b8794",
+    summary: "sizes itself to the request",
+  },
+  {
     id: "economic",
     label: "Economic",
     colour: "#5aa469",
