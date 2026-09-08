@@ -27,9 +27,11 @@ sudo apt-get install -y libnss3 libatk-bridge2.0-0 libgtk-3-0 libgbm1 libasound2
 curl -fsSL https://raw.githubusercontent.com/burkiuze/QuarkTeam/main/scripts/install.sh | bash
 ```
 
-Depoyu `~/.local/share/quarkcode/src` içine klonlar, AppImage'ı derler ve
-`~/.local/bin/quarkcode` komutuyla bir masaüstü kısayolu bırakır. `sudo`
-kullanmaz, `$HOME` dışına hiçbir şey yazmaz. İnternetten gelen bir betiği
+Depoyu `~/.local/share/quarkcode/src` içine klonlar, AppImage'ı derler,
+`~/.local/bin/quarkcode` komutunu kurar, uygulama menüsüne ekler ve
+**masaüstüne bir kısayol** bırakır (masaüstü klasörünün adı yerelleştirilmişse —
+`Masaüstü`, `Escritorio` — `xdg-user-dir` ile bulunur). `sudo` kullanmaz,
+`$HOME` dışına hiçbir şey yazmaz. İnternetten gelen bir betiği
 doğrudan çalıştırmak istemezsen önce indir, oku, sonra çalıştır:
 
 ```bash
