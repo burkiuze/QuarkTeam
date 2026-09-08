@@ -4,7 +4,6 @@ import {
   AlertTriangle,
   ArrowUp,
   FolderOpen,
-  GitBranch,
   Plus,
   RotateCcw,
   Sparkles,
@@ -17,6 +16,7 @@ import type {
   ProviderPreset,
   QuarkSettings,
   TeamMode,
+  TokenUsage,
 } from "./types";
 import { bridge, hasBridge } from "./lib/bridge";
 import { runQuarkTeam } from "./lib/orchestrator";
@@ -36,7 +36,14 @@ type Session = {
   events: AgentEvent[];
   plan: string[];
   lastRun: { checkpointId: string; files: string[] } | null;
+  usage: TokenUsage | null;
 };
+
+function formatTokens(value: number) {
+  if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(1)}M`;
+  if (value >= 1_000) return `${(value / 1_000).toFixed(1)}k`;
+  return String(value);
+}
 
 function describeError(error: unknown) {
   return error instanceof Error ? error.message : String(error);
@@ -86,6 +93,7 @@ function newSession(index: number): Session {
     events: [],
     plan: [],
     lastRun: null,
+    usage: null,
   };
 }
 
@@ -114,6 +122,7 @@ function App() {
   const activeIdRef = useRef(activeId);
 
   const session = sessions.find((item) => item.id === activeId) ?? sessions[0];
+  const usage = session?.usage ?? null;
 
   const patchSession = useCallback((id: string, patch: (current: Session) => Session) => {
     setSessions((prev) => prev.map((item) => (item.id === id ? patch(item) : item)));
@@ -285,6 +294,13 @@ function App() {
               : "";
         patchSession(id, (current) => ({
           ...current,
+          usage: current.usage
+            ? {
+                input: current.usage.input + result.usage.input,
+                output: current.usage.output + result.usage.output,
+                cached: current.usage.cached + result.usage.cached,
+              }
+            : result.usage,
           lastRun: result.changedFiles.length
             ? { checkpointId: result.checkpointId, files: result.changedFiles }
             : null,
@@ -459,7 +475,7 @@ function App() {
         </div>
       ) : null}
 
-      <main className="stage">
+      <main className={`stage ${session?.messages.length ? "threaded" : ""}`}>
         {session && session.messages.length ? (
           <div className="thread">
             {session.messages.map((message, index) => (
@@ -524,7 +540,6 @@ function App() {
             ) : null}
 
             <div ref={endRef} />
-            {composer}
           </div>
         ) : (
           <div className="hero">
@@ -534,14 +549,23 @@ function App() {
         )}
       </main>
 
+      {session?.messages.length ? <div className="dock">{composer}</div> : null}
+
       <footer className="stagefoot">
         <button onClick={openWorkspace} title="Open project">
           <FolderOpen size={13} /> {workspaceName}
         </button>
-        <span className="divider">/</span>
-        <span className="foot-muted">
-          <GitBranch size={13} /> {providerName || "No provider"}
-        </span>
+        <span className="divider">·</span>
+        <span className="foot-muted">{providerName || "No provider"}</span>
+        {usage ? (
+          <>
+            <span className="divider">·</span>
+            <span className="foot-muted" title="Tokens used in this session">
+              {formatTokens(usage.input)} in / {formatTokens(usage.output)} out
+              {usage.cached ? ` · ${formatTokens(usage.cached)} cached` : ""}
+            </span>
+          </>
+        ) : null}
       </footer>
 
       {viewer ? (

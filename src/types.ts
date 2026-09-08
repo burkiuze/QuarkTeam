@@ -87,6 +87,12 @@ export type PlanStep = {
   status: "pending" | "active" | "done" | "blocked";
 };
 
+export type TokenUsage = {
+  input: number;
+  output: number;
+  cached: number;
+};
+
 export type AgenticResult = {
   runId: string;
   checkpointId: string;
@@ -96,6 +102,7 @@ export type AgenticResult = {
   plan: PlanStep[];
   /** null when the project exposes no automated checks. */
   verified: boolean | null;
+  usage: TokenUsage;
 };
 
 export type QuarkBridge = {

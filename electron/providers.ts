@@ -29,15 +29,6 @@ export type ProviderPreset = Omit<ProviderSettings, "apiKey" | "model"> & {
 
 export const PROVIDER_PRESETS: ProviderPreset[] = [
   {
-    providerId: "opencode-zen",
-    name: "OpenCode Zen",
-    baseUrl: "https://opencode.ai/zen/v1",
-    protocol: "openai-responses",
-    // No model ids are hard-coded: which routes exist, and which of them are
-    // free, is decided by the account and changes without a QuarkCode release.
-    note: "Add your Zen key and press Fetch models. Routes the listing marks as free, or prices at zero, get a Free badge.",
-  },
-  {
     providerId: "openai",
     name: "OpenAI",
     baseUrl: "https://api.openai.com/v1",
@@ -66,6 +57,42 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
     name: "Groq",
     baseUrl: "https://api.groq.com/openai/v1",
     protocol: "openai-chat",
+  },
+  {
+    providerId: "nebius",
+    name: "Nebius AI Studio",
+    baseUrl: "https://api.studio.nebius.ai/v1",
+    protocol: "openai-chat",
+  },
+  {
+    providerId: "opencode-zen",
+    name: "OpenCode Zen",
+    baseUrl: "https://opencode.ai/zen/v1",
+    protocol: "openai-responses",
+    // No model ids are hard-coded: which routes exist, and which of them are
+    // free, is decided by the account and changes without a QuarkCode release.
+    note: "Add your Zen key and press Fetch models. Routes the listing marks as free, or prices at zero, get a Free badge.",
+  },
+  {
+    providerId: "ollama",
+    name: "Ollama",
+    baseUrl: "http://127.0.0.1:11434/v1",
+    protocol: "openai-chat",
+    local: true,
+  },
+  {
+    providerId: "lmstudio",
+    name: "LM Studio",
+    baseUrl: "http://127.0.0.1:1234/v1",
+    protocol: "openai-chat",
+    local: true,
+  },
+  {
+    providerId: "llamacpp",
+    name: "llama.cpp server",
+    baseUrl: "http://127.0.0.1:8080/v1",
+    protocol: "openai-chat",
+    local: true,
   },
   {
     providerId: "cerebras",
@@ -140,12 +167,6 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
     protocol: "openai-chat",
   },
   {
-    providerId: "nebius",
-    name: "Nebius AI Studio",
-    baseUrl: "https://api.studio.nebius.ai/v1",
-    protocol: "openai-chat",
-  },
-  {
     providerId: "siliconflow",
     name: "SiliconFlow",
     baseUrl: "https://api.siliconflow.com/v1",
@@ -156,27 +177,6 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
     name: "SambaNova",
     baseUrl: "https://api.sambanova.ai/v1",
     protocol: "openai-chat",
-  },
-  {
-    providerId: "ollama",
-    name: "Ollama",
-    baseUrl: "http://127.0.0.1:11434/v1",
-    protocol: "openai-chat",
-    local: true,
-  },
-  {
-    providerId: "lmstudio",
-    name: "LM Studio",
-    baseUrl: "http://127.0.0.1:1234/v1",
-    protocol: "openai-chat",
-    local: true,
-  },
-  {
-    providerId: "llamacpp",
-    name: "llama.cpp server",
-    baseUrl: "http://127.0.0.1:8080/v1",
-    protocol: "openai-chat",
-    local: true,
   },
   {
     providerId: "custom-openai",
@@ -208,7 +208,59 @@ export type ConverseResult = {
   toolCalls: ToolCall[];
   /** True when the tool calls came from the provider's own function calling. */
   native: boolean;
+  usage: TokenUsage;
 };
+
+export type TokenUsage = {
+  input: number;
+  output: number;
+  /** Prompt tokens served from the provider's cache, when it reports them. */
+  cached: number;
+};
+
+const NO_USAGE: TokenUsage = { input: 0, output: 0, cached: 0 };
+
+export function addUsage(a: TokenUsage, b: TokenUsage): TokenUsage {
+  return {
+    input: a.input + b.input,
+    output: a.output + b.output,
+    cached: a.cached + b.cached,
+  };
+}
+
+function readUsage(data: any, protocol: ProviderProtocol): TokenUsage {
+  if (protocol === "gemini") {
+    const meta = data?.usageMetadata;
+    return {
+      input: Number(meta?.promptTokenCount ?? 0) || 0,
+      output: Number(meta?.candidatesTokenCount ?? 0) || 0,
+      cached: Number(meta?.cachedContentTokenCount ?? 0) || 0,
+    };
+  }
+
+  const usage = data?.usage;
+  if (!usage) return { ...NO_USAGE };
+
+  if (protocol === "anthropic") {
+    return {
+      input: Number(usage.input_tokens ?? 0) || 0,
+      output: Number(usage.output_tokens ?? 0) || 0,
+      cached: Number(usage.cache_read_input_tokens ?? 0) || 0,
+    };
+  }
+
+  // OpenAI Chat and Responses use different field names for the same thing.
+  return {
+    input: Number(usage.prompt_tokens ?? usage.input_tokens ?? 0) || 0,
+    output: Number(usage.completion_tokens ?? usage.output_tokens ?? 0) || 0,
+    cached:
+      Number(
+        usage.prompt_tokens_details?.cached_tokens ??
+          usage.input_tokens_details?.cached_tokens ??
+          0,
+      ) || 0,
+  };
+}
 
 const COMPLETION_TIMEOUT_MS = 300_000;
 const DISCOVERY_TIMEOUT_MS = 30_000;
@@ -487,21 +539,32 @@ function buildAnthropicBody(
     else mapped.push({ role: "user", content: [block] });
   }
 
+  // The system prompt, tool schemas and first briefing repeat on every turn of
+  // an agent loop, so they are marked as a cache prefix. Anthropic then bills
+  // those tokens at the cache-read rate instead of the full input rate.
+  const cacheable = { type: "ephemeral" as const };
+  const first = mapped[0];
+  if (first?.role === "user" && first.content.length) {
+    const block = first.content[0] as Record<string, unknown>;
+    if (block?.type === "text") block.cache_control = cacheable;
+  }
+
+  const toolDefinitions = tools?.length
+    ? tools.map((tool, index) => ({
+        name: tool.name,
+        description: tool.description,
+        input_schema: tool.parameters,
+        ...(index === tools.length - 1 ? { cache_control: cacheable } : {}),
+      }))
+    : undefined;
+
   return {
     model: settings.model,
-    max_tokens: 16_384,
-    system,
+    max_tokens: 8_192,
+    system: [{ type: "text", text: system, cache_control: cacheable }],
     messages: mapped,
     ...(temperature === undefined ? {} : { temperature }),
-    ...(tools?.length
-      ? {
-          tools: tools.map((tool) => ({
-            name: tool.name,
-            description: tool.description,
-            input_schema: tool.parameters,
-          })),
-        }
-      : {}),
+    ...(toolDefinitions ? { tools: toolDefinitions } : {}),
   };
 }
 
@@ -571,7 +634,7 @@ function parseChat(data: any): ConverseResult {
       args: parseToolArgs(call.function.arguments),
     }));
 
-  return { text, toolCalls, native: toolCalls.length > 0 };
+  return { text, toolCalls, native: toolCalls.length > 0, usage: readUsage(data, "openai-chat") };
 }
 
 function parseResponses(data: any): ConverseResult {
@@ -606,7 +669,12 @@ function parseResponses(data: any): ConverseResult {
 
   let text = (answer.length ? answer : fallback).join("\n");
   if (!text.trim() && typeof data?.output_text === "string") text = data.output_text;
-  return { text, toolCalls, native: toolCalls.length > 0 };
+  return {
+    text,
+    toolCalls,
+    native: toolCalls.length > 0,
+    usage: readUsage(data, "openai-responses"),
+  };
 }
 
 function parseAnthropicResult(data: any): ConverseResult {
@@ -624,7 +692,12 @@ function parseAnthropicResult(data: any): ConverseResult {
     }
   }
 
-  return { text: text.join("\n"), toolCalls, native: toolCalls.length > 0 };
+  return {
+    text: text.join("\n"),
+    toolCalls,
+    native: toolCalls.length > 0,
+    usage: readUsage(data, "anthropic"),
+  };
 }
 
 function parseGeminiResult(data: any): ConverseResult {
@@ -643,7 +716,12 @@ function parseGeminiResult(data: any): ConverseResult {
     }
   }
 
-  return { text: text.join("\n"), toolCalls, native: toolCalls.length > 0 };
+  return {
+    text: text.join("\n"),
+    toolCalls,
+    native: toolCalls.length > 0,
+    usage: readUsage(data, "gemini"),
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -756,12 +834,14 @@ export function usesNativeTools(settings: ProviderSettings) {
 export async function providerComplete(
   settings: ProviderSettings,
   payload: { system: string; user: string; temperature?: number },
+  onUsage?: (usage: TokenUsage) => void,
 ): Promise<string> {
   const result = await providerConverse(settings, {
     system: payload.system,
     messages: [{ role: "user", text: payload.user }],
     temperature: payload.temperature,
   });
+  onUsage?.(result.usage);
   if (!result.text.trim()) {
     throw new Error(`${settings.providerId} returned an empty response.`);
   }

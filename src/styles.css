@@ -182,6 +182,11 @@ button {
   padding: 0 20px;
 }
 
+/* Once a thread exists the messages scroll and the composer stays docked. */
+.stage.threaded {
+  align-items: flex-start;
+}
+
 .hero {
   width: min(760px, 100%);
   margin: auto;
@@ -207,7 +212,7 @@ button {
   display: flex;
   flex-direction: column;
   gap: 16px;
-  padding: 8px 0 24px;
+  padding: 8px 0 12px;
 }
 
 /* --- Messages ----------------------------------------------------------- */
@@ -374,9 +379,15 @@ button {
   box-shadow: 0 18px 48px rgba(0, 0, 0, 0.45);
 }
 
-.thread .composer {
-  position: sticky;
-  bottom: 8px;
+.dock {
+  flex: none;
+  display: flex;
+  justify-content: center;
+  padding: 4px 20px 0;
+}
+
+.dock .composer {
+  width: min(760px, 100%);
 }
 
 .composer textarea {
@@ -686,7 +697,7 @@ button {
   background: #1b1b21;
 }
 
-/* --- Manage models ------------------------------------------------------ */
+/* --- Manage models (small card) ---------------------------------------- */
 
 .manage-backdrop,
 .viewer-backdrop {
@@ -699,99 +710,106 @@ button {
   z-index: 100;
 }
 
-.manage-modal {
-  width: min(900px, 92vw);
+.manage-card {
+  width: min(400px, 92vw);
   max-height: 84vh;
-  display: flex;
-  flex-direction: column;
-  border: 1px solid var(--line-2);
-  border-radius: 14px;
-  background: #111115;
-  box-shadow: 0 30px 80px rgba(0, 0, 0, 0.6);
-  overflow: hidden;
-}
-
-.manage-header {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  padding: 16px 18px;
-  border-bottom: 1px solid var(--line);
-}
-
-.manage-header h2 {
-  margin: 0;
-  font-size: 14px;
-  font-weight: 600;
-}
-
-.manage-header p {
-  margin: 4px 0 0;
-  color: var(--text-3);
-  font-size: 11px;
-}
-
-.manage-close {
-  width: 28px;
-  height: 28px;
-  display: grid;
-  place-items: center;
-  border: 1px solid var(--line-2);
-  border-radius: 8px;
-  background: var(--panel-2);
-  color: var(--text-2);
-  cursor: pointer;
-}
-
-.manage-body {
-  display: grid;
-  grid-template-columns: 250px 1fr;
-  min-height: 0;
-  flex: 1;
-}
-
-.manage-list {
-  border-right: 1px solid var(--line);
-  padding: 8px;
   overflow-y: auto;
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 12px;
+  padding: 16px;
+  border: 1px solid var(--line-2);
+  border-radius: 14px;
+  background: #121216;
+  box-shadow: 0 30px 80px rgba(0, 0, 0, 0.6);
 }
 
-.manage-item {
+.manage-card header {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 8px 10px;
+  justify-content: space-between;
+}
+
+.manage-card h2 {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.manage-card header button {
+  width: 26px;
+  height: 26px;
+  display: grid;
+  place-items: center;
   border: none;
-  border-radius: 8px;
+  border-radius: 7px;
   background: transparent;
   color: var(--text-2);
-  font-size: 12px;
   cursor: pointer;
-  text-align: left;
 }
 
-.manage-item:hover {
-  background: #1a1a20;
-}
-
-.manage-item.active {
-  background: #1e1e26;
+.manage-card header button:hover {
+  background: #1c1c22;
   color: var(--text);
 }
 
-.manage-item-name {
-  flex: 1;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.manage-item-count {
+.manage-card label {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
   color: var(--text-3);
   font-size: 10px;
+}
+
+.manage-card input,
+.manage-card select {
+  height: 33px;
+  border: 1px solid var(--line-2);
+  border-radius: 9px;
+  background: var(--panel-2);
+  color: var(--text);
+  font-family: inherit;
+  font-size: 12px;
+  padding: 0 10px;
+  outline: none;
+}
+
+.manage-card input:focus,
+.manage-card select:focus {
+  border-color: #4a4a55;
+}
+
+.manage-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.hint {
+  color: var(--text-3);
+  font-size: 10.5px;
+  line-height: 1.55;
+}
+
+.hint.error {
+  color: var(--red);
+}
+
+.link-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin-left: auto;
+  border: none;
+  background: transparent;
+  color: var(--text-3);
+  font-size: 10.5px;
+  cursor: pointer;
+}
+
+.link-button:hover {
+  color: var(--text);
 }
 
 .manage-dot {
@@ -806,79 +824,12 @@ button {
   background: var(--green);
 }
 
-.manage-add {
-  position: relative;
-  display: flex;
-  align-items: center;
-  margin-top: 6px;
-  color: var(--text-3);
-}
-
-.manage-add select {
-  width: 100%;
-  height: 32px;
-  border: 1px dashed var(--line-2);
-  border-radius: 8px;
-  background: transparent;
-  color: var(--text-2);
-  font-family: inherit;
-  font-size: 11px;
-  padding: 0 28px 0 10px;
-  cursor: pointer;
-  appearance: none;
-}
-
-.manage-add svg {
-  position: absolute;
-  right: 10px;
-  pointer-events: none;
-}
-
-.manage-detail {
-  padding: 16px 18px;
-  overflow-y: auto;
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-}
-
-.manage-detail label {
-  display: flex;
-  flex-direction: column;
-  gap: 5px;
-  color: var(--text-3);
-  font-size: 10px;
-}
-
-.manage-detail input,
-.manage-detail select {
-  height: 32px;
-  border: 1px solid var(--line-2);
-  border-radius: 8px;
-  background: var(--panel-2);
-  color: var(--text);
-  font-family: inherit;
-  font-size: 12px;
-  padding: 0 10px;
-  outline: none;
-}
-
-.manage-detail input:focus,
-.manage-detail select:focus {
-  border-color: #4a4a55;
-}
-
-.manage-actions {
-  display: flex;
-  gap: 8px;
-}
-
 .secondary-button {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  height: 30px;
-  padding: 0 11px;
+  height: 29px;
+  padding: 0 10px;
   border: 1px solid var(--line-2);
   border-radius: 8px;
   background: var(--panel-2);
@@ -897,76 +848,13 @@ button {
   cursor: not-allowed;
 }
 
-.danger-button {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  height: 30px;
-  padding: 0 10px;
-  border: 1px solid #4a2b2b;
-  border-radius: 8px;
-  background: #1a1214;
-  color: var(--red);
-  font-size: 11px;
-  cursor: pointer;
-}
-
-.danger-button:hover {
-  border-color: #6b3b3b;
-}
-
-.provider-note {
-  padding: 9px 11px;
-  border: 1px solid var(--line);
-  border-radius: 9px;
-  background: #101013;
-  color: var(--text-3);
-  font-size: 11px;
-  line-height: 1.6;
-}
-
-.manage-models {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  max-height: 200px;
-  overflow-y: auto;
-  padding: 4px 0;
-}
-
-.manage-models-heading {
-  width: 100%;
-  color: var(--text-3);
-  font-size: 10px;
-  letter-spacing: 0.04em;
-}
-
-.manage-model {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 5px 9px;
-  border: 1px solid var(--line);
-  border-radius: 999px;
-  background: #16161a;
-  color: var(--text-2);
-  font-size: 11px;
-  cursor: pointer;
-}
-
-.manage-model:hover {
-  border-color: #4a4a55;
-  color: var(--text);
-}
-
-.manage-model.active {
-  border-color: #4a4ac0;
-  color: var(--accent);
-}
-
-.manage-empty {
-  color: var(--text-3);
-  font-size: 12px;
+.model-badge {
+  flex: none;
+  padding: 1px 6px;
+  border-radius: 5px;
+  background: #23232b;
+  color: #8a8a95;
+  font-size: 9px;
 }
 
 /* --- Local (Ollama) models --------------------------------------------- */

@@ -108,7 +108,8 @@ QuarkCode v0.3 includes:
 - Electron + React + TypeScript desktop app
 - Session tabs, one conversation per task
 - Model picker grouped by provider, with Free badges and a free-only filter
-- Manage models: per-provider base URL, protocol, API key and catalogue
+- Manage models: pick a provider, paste a key, name a model — nothing else
+- Per-session token accounting, including cache hits
 - Local models through Ollama: what is installed, and one-click downloads
 - Monaco viewer for the files a run changed
 - **Safe Autopilot** that can operate on the opened workspace
@@ -156,6 +157,23 @@ the workspace to its pre-run state (created files are deleted again). Those snap
 running app only; they do not survive a restart.
 
 A future Full Autopilot mode can expose broader command execution behind explicit user approval.
+
+## Keeping API cost down
+
+Agent loops re-send their history on every turn, so the cost of a run is
+dominated by repeated input tokens. v0.3.1 attacks that directly:
+
+| Measure | Effect |
+| --- | --- |
+| Anthropic prompt caching | The system prompt, tool schemas and task briefing are marked as a cache prefix, so the repeated part of every turn bills at the cache-read rate |
+| Superseded reads collapsed | Reading a file twice keeps only the newest copy in the sent history; older copies shrink to a one-line stub |
+| Middle-out compaction | The briefing and plan stay pinned, only the middle of a long run is elided |
+| Cheaper advisory passes | Council answers are capped at 8 bullets over an 8k-char tree; the dedicated planning call runs in Swarm only |
+| Smaller fixed prefix | Workspace tree and council notes in the briefing were cut roughly in half |
+| Repeat guard | An identical tool call is answered from the guard instead of being re-run and re-billed |
+| Visible usage | The footer shows input/output/cached tokens per session, so a change in cost is observable rather than guessed |
+
+Fast mode remains the cheapest path: no council, no planner, no patch review.
 
 ## Why the harness matters
 
