@@ -7,6 +7,10 @@
     "name": "QuarkTeam"
   },
   "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/burkiuze/QuarkTeam.git"
+  },
   "engines": {
     "node": ">=20.19.0"
   },
@@ -17,7 +21,7 @@
     "typecheck": "tsc --noEmit",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
-    "dist": "npm run build && electron-builder"
+    "dist": "npm run build && electron-builder --publish never"
   },
   "dependencies": {
     "@monaco-editor/react": "^4.7.0",
@@ -55,7 +59,10 @@
       "target": "dmg"
     },
     "linux": {
-      "target": "AppImage"
-    }
+      "target": "AppImage",
+      "category": "Development",
+      "icon": "build/icon.png"
+    },
+    "publish": null
   }
 }

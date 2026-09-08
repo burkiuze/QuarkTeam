@@ -21,6 +21,25 @@ Linux'ta Electron için ek paketler gerekebilir:
 sudo apt-get install -y libnss3 libatk-bridge2.0-0 libgtk-3-0 libgbm1 libasound2
 ```
 
+### Tek satırda kurulum (Linux)
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/burkiuze/QuarkTeam/main/scripts/install.sh | bash
+```
+
+Depoyu `~/.local/share/quarkcode/src` içine klonlar, AppImage'ı derler ve
+`~/.local/bin/quarkcode` komutuyla bir masaüstü kısayolu bırakır. `sudo`
+kullanmaz, `$HOME` dışına hiçbir şey yazmaz. İnternetten gelen bir betiği
+doğrudan çalıştırmak istemezsen önce indir, oku, sonra çalıştır:
+
+```bash
+curl -fsSL -o quarkcode-install.sh https://raw.githubusercontent.com/burkiuze/QuarkTeam/main/scripts/install.sh
+less quarkcode-install.sh && bash quarkcode-install.sh
+```
+
+Derleme Electron ve Monaco indirdiği için birkaç dakika sürer ve yaklaşık
+1 GB geçici alan ister. Sonrasında `quarkcode` yazman yeterli.
+
 ### 1. Depoyu al ve bağımlılıkları kur
 
 ```bash
@@ -69,7 +88,7 @@ Yerel modellerde (Ollama, LM Studio, llama.cpp) anahtar gerekmez; yalnızca sunu
    testleri çalıştırır ve yamayı gözden geçirir.
 4. Sonuçtan memnun değilsen **Revert run** ile o çalıştırmanın tüm değişikliklerini geri al.
 
-### Masaüstü kurulum paketi üret
+### Elle kurulum paketi üret
 
 ```bash
 npm run dist
