@@ -6,12 +6,12 @@ import {
   FolderOpen,
   Plus,
   RotateCcw,
-  Sparkles,
   SquarePen,
   X,
 } from "lucide-react";
 import type {
   AgentEvent,
+  Effort,
   FileNode,
   ProviderPreset,
   QuarkSettings,
@@ -20,6 +20,8 @@ import type {
 } from "./types";
 import { bridge, hasBridge } from "./lib/bridge";
 import { runQuarkTeam } from "./lib/orchestrator";
+import { Activity } from "./components/Activity";
+import { EffortControl, effortColour } from "./components/EffortControl";
 import { ManageModels } from "./components/ManageModels";
 import { ModelPicker } from "./components/ModelPicker";
 
@@ -37,6 +39,8 @@ type Session = {
   plan: string[];
   lastRun: { checkpointId: string; files: string[] } | null;
   usage: TokenUsage | null;
+  startedAt: number | null;
+  finishedAt: number | null;
 };
 
 function formatTokens(value: number) {
@@ -94,6 +98,8 @@ function newSession(index: number): Session {
     plan: [],
     lastRun: null,
     usage: null,
+    startedAt: null,
+    finishedAt: null,
   };
 }
 
@@ -104,7 +110,7 @@ function App() {
   const [activeId, setActiveId] = useState<string>("");
   const [prompt, setPrompt] = useState("");
   const [busy, setBusy] = useState(false);
-  const [mode, setMode] = useState<TeamMode>("swarm");
+  const [effort, setEffort] = useState<Effort>("high");
   const [autopilot, setAutopilot] = useState(true);
   const [showManage, setShowManage] = useState(false);
   const [refreshing, setRefreshing] = useState<string | null>(null);
@@ -272,19 +278,14 @@ function App() {
       messages: [...current.messages, { role: "user", content: goal }],
       events: [],
       plan: [],
+      startedAt: Date.now(),
+      finishedAt: null,
     }));
     setBusy(true);
 
     try {
       if (autopilot) {
-        const result = await bridge().runAgentic({
-          goal,
-          options: {
-            quality: mode,
-            mode: "safe",
-            maxSteps: mode === "fast" ? 24 : mode === "team" ? 40 : 56,
-          },
-        });
+        const result = await bridge().runAgentic({ goal, options: { mode: "safe", effort } });
         setTree(await bridge().getTree());
         const verified =
           result.verified === true
@@ -314,10 +315,16 @@ function App() {
           ],
         }));
       } else {
+        const advisoryMode: TeamMode =
+          effort === "economic" || effort === "medium"
+            ? "fast"
+            : effort === "high" || effort === "extra"
+              ? "team"
+              : "swarm";
         const answer = await runQuarkTeam(
           goal,
           { rootName: workspaceName, tree: flattenTree(tree).join("\n") },
-          mode,
+          advisoryMode,
           () => undefined,
         );
         patchSession(id, (current) => ({
@@ -334,6 +341,7 @@ function App() {
         ],
       }));
     } finally {
+      patchSession(id, (current) => ({ ...current, finishedAt: Date.now() }));
       setBusy(false);
     }
   }
@@ -383,6 +391,7 @@ function App() {
         <button className="icon-button" onClick={openWorkspace} title="Open project">
           <Plus size={15} />
         </button>
+        <EffortControl value={effort} onChange={setEffort} disabled={busy} />
         <ModelPicker
           settings={settings}
           providers={providers}
@@ -390,20 +399,9 @@ function App() {
           onManage={() => setShowManage(true)}
           disabled={busy}
         />
-        <div className="segmented">
-          {(["fast", "team", "swarm"] as TeamMode[]).map((item) => (
-            <button
-              key={item}
-              className={mode === item ? "active" : ""}
-              onClick={() => !busy && setMode(item)}
-              title={`${item} crew`}
-            >
-              {item === "fast" ? "Fast" : item === "team" ? "Team" : "Swarm"}
-            </button>
-          ))}
-        </div>
         <button
           className={`autopilot-toggle ${autopilot ? "on" : ""}`}
+          style={autopilot ? { borderColor: effortColour(effort), color: effortColour(effort) } : undefined}
           onClick={() => !busy && setAutopilot((value) => !value)}
           title={autopilot ? "Autopilot can edit and verify files" : "Advice only, no edits"}
         >
@@ -475,7 +473,10 @@ function App() {
         </div>
       ) : null}
 
-      <main className={`stage ${session?.messages.length ? "threaded" : ""}`}>
+      <main
+        className={`stage ${session?.messages.length ? "threaded" : ""}`}
+        style={{ ["--effort" as string]: effortColour(effort) }}
+      >
         {session && session.messages.length ? (
           <div className="thread">
             {session.messages.map((message, index) => (
@@ -496,12 +497,14 @@ function App() {
               </div>
             ))}
 
-            {busy ? (
+            {session.events.length || busy ? (
               <div className="running">
-                <div className="running-head">
-                  <Sparkles size={14} />
-                  {autopilot ? "The crew is working on your project…" : "The crew is reasoning…"}
-                </div>
+                <Activity
+                  events={session.events}
+                  running={busy}
+                  startedAt={session.startedAt}
+                  finishedAt={session.finishedAt}
+                />
                 {session.plan.length ? (
                   <div className="plan">
                     {session.plan.map((step, index) => (
@@ -522,14 +525,6 @@ function App() {
                     ))}
                   </div>
                 ) : null}
-                <div className="trace">
-                  {session.events.slice(-6).map((event, index) => (
-                    <div className={`trace-row ${event.type}`} key={`${event.ts}-${index}`}>
-                      <strong>{event.label}</strong>
-                      {event.detail ? <span>{event.detail.slice(0, 120)}</span> : null}
-                    </div>
-                  ))}
-                </div>
               </div>
             ) : null}
 

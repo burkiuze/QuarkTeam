@@ -258,6 +258,18 @@ export function ManageModels({
           </datalist>
         </label>
 
+        <label>
+          Helper model <span className="hint">— advisers, planner and reviewer</span>
+          <input
+            value={settings.helperModel ?? ""}
+            onChange={(event) =>
+              onChange({ ...settings, helperModel: event.target.value || undefined })
+            }
+            placeholder="Optional: a cheaper model for the easy calls"
+            list="known-models"
+          />
+        </label>
+
         {preset?.local && account ? (
           <LocalModels
             account={account}

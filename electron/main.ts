@@ -5,6 +5,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { restoreCheckpoint, runAgenticTask } from "./agent-runtime.js";
+import type { Effort } from "./agent-tools.js";
 import { listLocalModels, ollamaStatus, pullModel } from "./ollama.js";
 import {
   discoverModels,
@@ -28,6 +29,13 @@ type QuarkSettings = {
   accounts: ProviderAccount[];
   activeProviderId: string;
   activeModel: string;
+  /**
+   * Optional cheaper model for the advisory roles (council, planner,
+   * reviewer). Routing the easy calls to a weak model is the same idea
+   * RouteLLM applies to whole queries, and it is where most of a run's
+   * avoidable cost sits.
+   */
+  helperModel?: string;
 };
 
 const execAsync = promisify(exec);
@@ -124,7 +132,7 @@ function buildDefaultSettings(): QuarkSettings {
 }
 
 /** Collapses the multi-provider settings into the single account a run uses. */
-function resolveActive(settings: QuarkSettings): ProviderSettings {
+function resolveActive(settings: QuarkSettings, model?: string): ProviderSettings {
   const account =
     settings.accounts.find((item) => item.providerId === settings.activeProviderId) ??
     settings.accounts[0];
@@ -133,7 +141,7 @@ function resolveActive(settings: QuarkSettings): ProviderSettings {
     providerId: account.providerId,
     baseUrl: account.baseUrl,
     apiKey: account.apiKey,
-    model: settings.activeModel,
+    model: model || settings.activeModel,
     protocol: account.protocol,
     extraHeaders: account.extraHeaders ?? {},
   };
@@ -171,6 +179,7 @@ function migrate(stored: any): QuarkSettings | null {
       accounts,
       activeProviderId: String(stored.activeProviderId ?? accounts[0].providerId),
       activeModel: String(stored.activeModel ?? ""),
+      helperModel: stored.helperModel ? String(stored.helperModel) : undefined,
     };
   }
   const legacy = sanitizeAccount(stored);
@@ -423,24 +432,24 @@ app.whenReady().then(async () => {
       _event,
       payload: {
         goal: string;
-        options?: {
-          maxSteps?: number;
-          mode?: "safe" | "full";
-          quality?: "fast" | "team" | "swarm";
-        };
+        options?: { mode?: "safe" | "full"; effort?: Effort };
       },
     ) => {
       const root = requireWorkspace();
-      const settings = resolveActive(await readSettings());
+      const stored = await readSettings();
+      const settings = resolveActive(stored);
       if (requiresApiKey(settings)) {
         throw new Error("Connect an AI provider before starting Autopilot.");
       }
       if (!settings.model) throw new Error("Pick a model before starting Autopilot.");
+      const helperModel = stored.helperModel?.trim();
+      const helper = helperModel ? resolveActive(stored, helperModel) : undefined;
       const goal = payload?.goal?.trim();
       if (!goal) throw new Error("Describe what QuarkTeam should do.");
       return runAgenticTask({
         root,
         settings,
+        helperSettings: helper,
         goal,
         options: payload.options,
         window: requireWindow(),

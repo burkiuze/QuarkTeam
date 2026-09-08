@@ -66,12 +66,29 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
   },
   {
     providerId: "opencode-zen",
-    name: "OpenCode Zen",
+    // Shown as Quark in the UI; the id stays stable so stored settings migrate.
+    name: "Quark",
     baseUrl: "https://opencode.ai/zen/v1",
     protocol: "openai-responses",
     // No model ids are hard-coded: which routes exist, and which of them are
     // free, is decided by the account and changes without a QuarkCode release.
-    note: "Add your Zen key and press Fetch models. Routes the listing marks as free, or prices at zero, get a Free badge.",
+    note: "Quark routes run on the OpenCode Zen endpoint. Add your key and press Fetch models: routes the listing marks as free, or prices at zero, get a Free badge.",
+  },
+  {
+    providerId: "bifrost",
+    name: "Bifrost gateway",
+    baseUrl: "http://localhost:8080/v1",
+    protocol: "openai-chat",
+    local: true,
+    note: "Local AI gateway (github.com/maximhq/bifrost): one OpenAI-compatible endpoint in front of 23+ providers, with semantic caching, load balancing and automatic failover. Start it with `npx -y @maximhq/bifrost`.",
+  },
+  {
+    providerId: "routellm",
+    name: "RouteLLM router",
+    baseUrl: "http://localhost:6060/v1",
+    protocol: "openai-chat",
+    local: true,
+    note: "Local model router (github.com/lm-sys/RouteLLM): sends easy turns to a weak model and hard ones to a strong model. Start its OpenAI-compatible server with `python -m routellm.openai_server --routers mf --strong-model ... --weak-model ...`.",
   },
   {
     providerId: "ollama",

@@ -171,9 +171,27 @@ dominated by repeated input tokens. v0.3.1 attacks that directly:
 | Cheaper advisory passes | Council answers are capped at 8 bullets over an 8k-char tree; the dedicated planning call runs in Swarm only |
 | Smaller fixed prefix | Workspace tree and council notes in the briefing were cut roughly in half |
 | Repeat guard | An identical tool call is answered from the guard instead of being re-run and re-billed |
+| Helper model | An optional cheaper model runs the advisers, planner and reviewer while the executor keeps the strong one — the RouteLLM idea applied per role |
+| Output compression | Command output is stripped of ANSI codes and repeated lines before entering the transcript, so the saving compounds on every later turn |
+| Gateway support | Presets for [Bifrost](https://github.com/maximhq/bifrost) (semantic caching, failover) and [RouteLLM](https://github.com/lm-sys/RouteLLM) (query routing) — see `PRIOR-ART.md` |
 | Visible usage | The footer shows input/output/cached tokens per session, so a change in cost is observable rather than guessed |
 
-Fast mode remains the cheapest path: no council, no planner, no patch review.
+**Economic** effort remains the cheapest path: 16 turns, no advisers, no review.
+
+## Effort
+
+Effort is a real dial, not a label. Each level changes how much work runs:
+
+| Level | Executor turns | Advisers | Planner | Reviewers |
+| --- | --- | --- | --- | --- |
+| Economic | 16 | — | — | — |
+| Medium | 28 | — | — | 1 |
+| High | 40 | 2 | — | 1 |
+| Extra | 56 | 2 | yes | 1 |
+| Max | 80 | 4 | yes | 1 |
+| Ultracode | 120 | 4 | yes | 2 (different angles) |
+
+The gauge next to the composer sets it, and its colour tracks the level.
 
 ## Why the harness matters
 

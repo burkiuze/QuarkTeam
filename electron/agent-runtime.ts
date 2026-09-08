@@ -14,6 +14,7 @@ import {
 } from "./providers.js";
 import {
   detectChecks,
+  EFFORT_PROFILES,
   discoverSkills,
   evaluateFinish,
   projectGuidance,
@@ -26,6 +27,8 @@ import {
   walk,
   workspaceDiff,
   type AgentEvent,
+  type Effort,
+  type EffortProfile,
   type PlanStep,
   type ToolContext,
 } from "./agent-tools.js";
@@ -33,9 +36,8 @@ import {
 export type { AgentEvent } from "./agent-tools.js";
 
 export type AgenticOptions = {
-  maxSteps?: number;
   mode?: "safe" | "full";
-  quality?: "fast" | "team" | "swarm";
+  effort?: Effort;
 };
 
 /** Snapshots of every file an autopilot run touched, keyed by checkpoint id. */
@@ -341,6 +343,13 @@ async function runExecutor(input: {
     }
     emptyTurns = 0;
 
+    // Prose the model wrote alongside its call explains why it is doing this;
+    // it is the most useful line in the activity log.
+    const note = response.text.trim();
+    if (note && calls.length) {
+      ctx.emit({ type: "note", label: note.slice(0, 400) });
+    }
+
     // Only the first call of a turn is executed: one action per step keeps the
     // observation loop tight, which is where weaker models stay accurate.
     const call = calls[0];
@@ -375,7 +384,8 @@ async function runExecutor(input: {
       continue;
     }
 
-    ctx.emit({ type: "tool", label: call.name, detail: describeArgs(call) });
+    const described = describeCall(call);
+    ctx.emit({ type: "tool", label: described.label, detail: described.detail });
     try {
       const result = await runTool(ctx, call.name, call.args);
       const clipped =
@@ -399,40 +409,71 @@ async function runExecutor(input: {
   };
 }
 
-function describeArgs(call: ToolCall) {
+/**
+ * Turns a tool call into something a person can follow at a glance. The UI
+ * shows these verbatim, so they read as activity rather than as an API log.
+ */
+function describeCall(call: ToolCall): { label: string; detail?: string } {
   const args = call.args ?? {};
-  for (const key of ["path", "command", "query", "name", "task"]) {
-    const value = args[key];
-    if (typeof value === "string" && value) return value.slice(0, 120);
+  const path = typeof args.path === "string" ? args.path : undefined;
+  const text = (value: unknown) => (typeof value === "string" ? value : "");
+
+  switch (call.name) {
+    case "list_files":
+      return { label: "Listing files", detail: path };
+    case "read_file":
+      return { label: `Reading ${path ?? "a file"}` };
+    case "read_many": {
+      const paths = Array.isArray(args.paths) ? args.paths.map(String) : [];
+      return { label: `Reading ${paths.length} files`, detail: paths.slice(0, 4).join(", ") };
+    }
+    case "search_text":
+      return { label: `Searching for "${text(args.query).slice(0, 60)}"` };
+    case "write_file":
+      return { label: `Writing ${path ?? "a file"}` };
+    case "edit_file":
+      return { label: `Editing ${path ?? "a file"}` };
+    case "run_command":
+      return { label: "Running a command", detail: text(args.command).slice(0, 120) };
+    case "run_checks":
+      return { label: "Running the project checks" };
+    case "git_diff":
+      return { label: "Inspecting the diff" };
+    case "git_status":
+      return { label: "Checking git status" };
+    case "list_skills":
+      return { label: "Looking for workspace skills" };
+    case "read_skill":
+      return { label: `Reading the ${text(args.name)} skill` };
+    case "delegate":
+      return { label: `Asking a ${text(args.role) || "specialist"}`, detail: text(args.task).slice(0, 120) };
+    case "update_plan":
+      return { label: "Updating the plan" };
+    default:
+      return { label: call.name };
   }
-  if (Array.isArray(args.paths)) return args.paths.slice(0, 4).join(", ");
-  return undefined;
 }
 
 // ---------------------------------------------------------------------------
 // Advisory passes
 // ---------------------------------------------------------------------------
 
+const COUNCIL_ROLES: Array<[string, string]> = [
+  ["Repository Scout", "Find likely files, conventions, dependencies and hidden constraints."],
+  ["Adversarial Reviewer", "Predict correctness, security, testing and maintainability traps."],
+  ["Architect", "Propose the smallest robust design and integration plan."],
+  ["Test Engineer", "Define high-value verification steps and regression tests."],
+];
+
 async function council(
   settings: ProviderSettings,
   goal: string,
   tree: string,
-  quality: "fast" | "team" | "swarm",
+  roleCount: number,
   onUsage: (usage: TokenUsage) => void,
 ) {
-  if (quality === "fast") return "";
-  const roles: Array<[string, string]> =
-    quality === "swarm"
-      ? [
-          ["Repository Scout", "Find likely files, conventions, dependencies and hidden constraints."],
-          ["Architect", "Propose the smallest robust design and integration plan."],
-          ["Adversarial Reviewer", "Predict correctness, security, testing and maintainability traps."],
-          ["Test Engineer", "Define high-value verification steps and regression tests."],
-        ]
-      : [
-          ["Repository Scout", "Find likely files and constraints."],
-          ["Adversarial Reviewer", "Predict likely failure modes and verification needs."],
-        ];
+  if (roleCount <= 0) return "";
+  const roles = COUNCIL_ROLES.slice(0, roleCount);
 
   // One flaky advisory call must not abort a run that can still do useful work.
   const responses = await Promise.all(
@@ -497,19 +538,25 @@ async function seedPlan(
   }
 }
 
+const REVIEWER_ANGLES = [
+  "correctness, regressions and missing tests",
+  "security, resource handling and edge cases the first reviewer would miss",
+];
+
 async function reviewDiff(
   settings: ProviderSettings,
   goal: string,
   diff: string,
   onUsage: (usage: TokenUsage) => void,
+  pass = 0,
 ) {
   if (!diff.trim()) return "APPROVED (no diff to review).";
+  const angle = REVIEWER_ANGLES[Math.min(pass, REVIEWER_ANGLES.length - 1)];
   try {
     return await providerComplete(
       settings,
       {
-        system:
-          "You are Prism, a skeptical senior code reviewer. Review only material correctness, security, regression and test issues in this diff. Be concise and specific: name the file and what to change. If the patch is good, reply with APPROVED on the first line. Do not invent files outside the diff.",
+        system: `You are Prism, a skeptical senior code reviewer. Review this diff for ${angle}. Be concise and specific: name the file and what to change. If the patch is good, reply with APPROVED on the first line. Do not invent files outside the diff.`,
         user: `GOAL\n${goal}\n\nDIFF\n${diff.slice(0, 40_000)}`,
         temperature: 0.1,
       },
@@ -561,16 +608,19 @@ export async function restoreCheckpoint(root: string, checkpointId: string) {
 export async function runAgenticTask(input: {
   root: string;
   settings: ProviderSettings;
+  /** Cheaper model for advisory roles; falls back to the main one. */
+  helperSettings?: ProviderSettings;
   goal: string;
   options?: AgenticOptions;
   window: BrowserWindow;
 }) {
+  // Council, planner and reviewer are short, low-stakes calls. Running them on
+  // a weaker model is the cheapest lever a run has.
+  const helper = input.helperSettings ?? input.settings;
   const runId = randomUUID();
-  const options: Required<AgenticOptions> = {
-    maxSteps: Math.min(Math.max(input.options?.maxSteps ?? 40, 8), 120),
-    mode: input.options?.mode ?? "safe",
-    quality: input.options?.quality ?? "swarm",
-  };
+  const effort: Effort = input.options?.effort ?? "high";
+  const profile: EffortProfile = EFFORT_PROFILES[effort] ?? EFFORT_PROFILES.high;
+  const mode = input.options?.mode ?? "safe";
 
   const emit = (event: Omit<AgentEvent, "runId" | "ts">) => {
     if (input.window.isDestroyed()) return;
@@ -596,7 +646,7 @@ export async function runAgenticTask(input: {
 
   const ctx: ToolContext = {
     root: input.root,
-    mode: options.mode,
+    mode,
     settings: input.settings,
     emit,
     checkpoint: new Map(),
@@ -607,14 +657,17 @@ export async function runAgenticTask(input: {
   };
 
   let councilNotes = "";
-  if (options.quality !== "fast") {
-    emit({ type: "phase", label: "Background council", detail: options.quality });
-    councilNotes = await council(input.settings, input.goal, tree, options.quality, onUsage);
-    // Swarm alone pays for a dedicated planning call; Team lets the executor
-    // draft its own plan with update_plan on its first turn.
-    if (options.quality === "swarm") {
-      ctx.plan = await seedPlan(input.settings, input.goal, councilNotes, onUsage);
-    }
+  if (profile.councilRoles > 0) {
+    emit({
+      type: "phase",
+      label: `Consulting ${profile.councilRoles} specialists`,
+      detail: profile.label,
+    });
+    councilNotes = await council(helper, input.goal, tree, profile.councilRoles, onUsage);
+  }
+  if (profile.seedPlan && councilNotes) {
+    emit({ type: "phase", label: "Drafting a plan" });
+    ctx.plan = await seedPlan(helper, input.goal, councilNotes, onUsage);
     if (ctx.plan.length) emit({ type: "plan", label: "Plan drafted", detail: renderPlan(ctx.plan) });
   }
 
@@ -631,7 +684,7 @@ export async function runAgenticTask(input: {
     },
   ];
 
-  const primary = await runExecutor({ ctx, messages, maxSteps: options.maxSteps, onUsage });
+  const primary = await runExecutor({ ctx, messages, maxSteps: profile.maxSteps, onUsage });
   let finalAnswer = primary.answer;
 
   let diff = "";
@@ -641,10 +694,14 @@ export async function runAgenticTask(input: {
     // Non-git workspaces are still valid.
   }
 
-  if (options.quality !== "fast" && diff.trim() && primary.reason !== "provider") {
+  if (profile.reviewers > 0 && diff.trim() && primary.reason !== "provider") {
     emit({ type: "phase", label: "Independent patch review" });
-    const review = await reviewDiff(input.settings, input.goal, diff, onUsage);
-    if (!/^\s*APPROVED\b/i.test(review)) {
+    const reviews: string[] = [];
+    for (let pass = 0; pass < profile.reviewers; pass += 1) {
+      reviews.push(await reviewDiff(helper, input.goal, diff, onUsage, pass));
+    }
+    const review = reviews.join("\n\n");
+    if (!reviews.every((entry) => /^\s*APPROVED\b/i.test(entry))) {
       emit({ type: "warning", label: "Reviewer requested repair", detail: review.slice(0, 900) });
       ctx.state.finishAttempts = 0;
       ctx.state.pendingVerification = ctx.state.edits > 0;
@@ -658,7 +715,7 @@ export async function runAgenticTask(input: {
       const repair = await runExecutor({
         ctx,
         messages: repairMessages,
-        maxSteps: Math.min(16, Math.ceil(options.maxSteps / 2)),
+        maxSteps: profile.repairSteps,
         onUsage,
       });
       finalAnswer = `${finalAnswer}\n\nRepair pass: ${repair.answer}`.trim();

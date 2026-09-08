@@ -63,6 +63,8 @@ export type QuarkSettings = {
   accounts: ProviderAccount[];
   activeProviderId: string;
   activeModel: string;
+  /** Cheaper model used for advisers, planning and review. */
+  helperModel?: string;
 };
 
 export type ProviderPreset = Omit<ProviderSettings, "apiKey" | "model"> & {
@@ -75,7 +77,7 @@ export type ProviderPreset = Omit<ProviderSettings, "apiKey" | "model"> & {
 
 export type AgentEvent = {
   runId: string;
-  type: "phase" | "tool" | "result" | "warning" | "plan" | "done";
+  type: "phase" | "tool" | "result" | "warning" | "plan" | "note" | "done";
   label: string;
   detail?: string;
   ts: number;
@@ -126,11 +128,7 @@ export type QuarkBridge = {
   }): Promise<string>;
   runAgentic(payload: {
     goal: string;
-    options?: {
-      maxSteps?: number;
-      mode?: "safe" | "full";
-      quality?: TeamMode;
-    };
+    options?: { mode?: "safe" | "full"; effort?: Effort };
   }): Promise<AgenticResult>;
   revertCheckpoint(
     checkpointId: string,
@@ -150,6 +148,9 @@ export type AgentRunState = {
   status: AgentStatus;
 };
 
+export type Effort = "economic" | "medium" | "high" | "extra" | "max" | "ultracode";
+
+/** Kept for the advisory orchestrator, which still thinks in three tiers. */
 export type TeamMode = "fast" | "team" | "swarm";
 
 export type WorkspaceContext = {
